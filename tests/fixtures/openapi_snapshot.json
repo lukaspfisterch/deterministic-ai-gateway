@@ -1,6 +1,164 @@
 {
   "components": {
     "schemas": {
+      "CapabilitiesFeatures": {
+        "properties": {
+          "json_mode": {
+            "title": "Json Mode",
+            "type": "boolean"
+          },
+          "streaming": {
+            "title": "Streaming",
+            "type": "boolean"
+          },
+          "tools": {
+            "title": "Tools",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "streaming",
+          "tools",
+          "json_mode"
+        ],
+        "title": "CapabilitiesFeatures",
+        "type": "object"
+      },
+      "CapabilitiesHealth": {
+        "properties": {
+          "checked_at": {
+            "title": "Checked At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "checked_at"
+        ],
+        "title": "CapabilitiesHealth",
+        "type": "object"
+      },
+      "CapabilitiesLimits": {
+        "properties": {
+          "max_output_tokens": {
+            "title": "Max Output Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_output_tokens"
+        ],
+        "title": "CapabilitiesLimits",
+        "type": "object"
+      },
+      "CapabilitiesModel": {
+        "properties": {
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "features": {
+            "$ref": "#/components/schemas/CapabilitiesFeatures"
+          },
+          "health": {
+            "$ref": "#/components/schemas/CapabilitiesHealth"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/CapabilitiesLimits"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "features",
+          "limits",
+          "health"
+        ],
+        "title": "CapabilitiesModel",
+        "type": "object"
+      },
+      "CapabilitiesProvider": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/CapabilitiesModel"
+            },
+            "title": "Models",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "models"
+        ],
+        "title": "CapabilitiesProvider",
+        "type": "object"
+      },
+      "CapabilitiesResponse": {
+        "properties": {
+          "interface_version": {
+            "title": "Interface Version",
+            "type": "integer"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/CapabilitiesProvider"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "surfaces": {
+            "$ref": "#/components/schemas/CapabilitiesSurfaces"
+          }
+        },
+        "required": [
+          "interface_version",
+          "providers",
+          "surfaces"
+        ],
+        "title": "CapabilitiesResponse",
+        "type": "object"
+      },
+      "CapabilitiesSurfaces": {
+        "properties": {
+          "events": {
+            "title": "Events",
+            "type": "boolean"
+          },
+          "ingress_intent": {
+            "title": "Ingress Intent",
+            "type": "boolean"
+          },
+          "snapshot": {
+            "title": "Snapshot",
+            "type": "boolean"
+          },
+          "tail": {
+            "title": "Tail",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "tail",
+          "snapshot",
+          "events",
+          "ingress_intent"
+        ],
+        "title": "CapabilitiesSurfaces",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -63,9 +221,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Capabilities Capabilities Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/CapabilitiesResponse"
                 }
               }
             },
@@ -341,8 +497,8 @@
             "name": "since",
             "required": false,
             "schema": {
-              "default": 0,
-              "minimum": 0,
+              "default": -1,
+              "minimum": -1,
               "title": "Since",
               "type": "integer"
             }

@@ -5,25 +5,22 @@ from importlib import import_module
 from typing import Any, Mapping, get_type_hints
 
 from dbl_policy import Policy, PolicyContext, PolicyDecision, decision_to_dbl_event
+from dbl_policy.model import ALLOWED_CONTEXT_KEYS as POLICY_ALLOWED_CONTEXT_KEYS
 
 from ..ports.policy_port import DecisionResult, PolicyPort
 
 
-ALLOWED_CONTEXT_KEYS = {
-    "stream_id",
-    "lane",
-    "actor",
-    "intent_type",
-    "correlation_id",
-    "payload",
-}
+ALLOWED_CONTEXT_KEYS = set(POLICY_ALLOWED_CONTEXT_KEYS)
 
 
 @dataclass(frozen=True)
 class DblPolicyAdapter(PolicyPort):
+    policy: Policy | None = None
+
     def decide(self, authoritative_input: Mapping[str, Any]) -> DecisionResult:
         context = _build_policy_context(authoritative_input)
-        decision = _evaluate_policy(context)
+        policy = self.policy or _load_policy()
+        decision = policy.evaluate(context)
         gate_event = decision_to_dbl_event(decision, authoritative_input["correlation_id"])
         policy_version = _policy_version_as_int(decision.policy_version.value)
         return DecisionResult(
@@ -36,7 +33,16 @@ class DblPolicyAdapter(PolicyPort):
 
 
 def _build_policy_context(authoritative_input: Mapping[str, Any]) -> PolicyContext:
-    filtered = {key: authoritative_input.get(key) for key in ALLOWED_CONTEXT_KEYS}
+    payload = authoritative_input.get("payload")
+    inputs_source = payload
+    if isinstance(payload, Mapping):
+        maybe_inputs = payload.get("inputs")
+        if isinstance(maybe_inputs, Mapping):
+            inputs_source = maybe_inputs
+    if isinstance(inputs_source, Mapping):
+        filtered = {key: inputs_source[key] for key in ALLOWED_CONTEXT_KEYS if key in inputs_source}
+    else:
+        filtered = {}
     tenant = authoritative_input.get("tenant_id", "unknown")
     tenant_type = _tenant_id_type()
     try:
@@ -46,14 +52,9 @@ def _build_policy_context(authoritative_input: Mapping[str, Any]) -> PolicyConte
     return PolicyContext(tenant_id=tenant_value, inputs=filtered)
 
 
-def _evaluate_policy(context: PolicyContext) -> PolicyDecision:
-    policy = _load_policy()
-    return policy.evaluate(context)
-
-
 def _load_policy() -> Policy:
     module_path = _get_env("DBL_GATEWAY_POLICY_MODULE")
-    obj_name = _get_env("DBL_GATEWAY_POLICY_OBJECT", "policy")
+    obj_name = _get_env("DBL_GATEWAY_POLICY_OBJECT", "POLICY")
     module = import_module(module_path)
     obj = getattr(module, obj_name, None)
     if obj is None:

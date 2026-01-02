@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 import sys
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from dbl_gateway.app import create_app
 from dbl_gateway.ports.execution_port import ExecutionResult
@@ -145,6 +146,11 @@ def test_ingress_returns_immediately_without_output(tmp_path: Path, monkeypatch:
         resp = client.post("/ingress/intent", json=_intent_envelope("hello"))
         elapsed = time.monotonic() - start
         assert resp.status_code == 202
+        ack = resp.json()
+        assert ack["accepted"] is True
+        assert ack["queued"] is True
+        assert ack["correlation_id"] == "c-1"
+        assert isinstance(ack["index"], int)
         assert elapsed < 0.2
         for _ in range(10):
             snap = client.get("/snapshot").json()
@@ -187,6 +193,27 @@ def test_execution_error_captured_as_event(tmp_path: Path, monkeypatch: pytest.M
                 return
             time.sleep(0.05)
         assert False, "execution error event not emitted"
+
+
+def test_execution_model_unavailable_records_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DBL_GATEWAY_DB", str(tmp_path / "trail.sqlite"))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_CHAT_MODEL_IDS", "gpt-4o-mini")
+    app = create_app()
+    with TestClient(app) as client:
+        resp = client.post("/ingress/intent", json=_intent_envelope("hello"))
+        assert resp.status_code == 202
+        for _ in range(10):
+            snap = client.get("/snapshot").json()
+            executions = [event for event in snap["events"] if event["kind"] == "EXECUTION"]
+            if executions:
+                payload = executions[-1]["payload"]
+                assert "error" in payload
+                assert payload["error"]["code"] == "model_unavailable"
+                return
+            time.sleep(0.05)
+        assert False, "execution model_unavailable event not emitted"
 
 
 def test_digest_determinism_via_dbl_core(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -233,6 +260,33 @@ def test_forbidden_fields_not_in_intent_payload(tmp_path: Path, monkeypatch: pyt
         assert forbidden.isdisjoint(set(payload.keys()))
 
 
+def test_chat_message_preserves_inputs_for_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DBL_GATEWAY_DB", str(tmp_path / "trail.sqlite"))
+    app = create_app()
+    with TestClient(app) as client:
+        payload = _intent_envelope("hello")
+        payload["payload"]["inputs"] = {
+            "principal_id": "user-1",
+            "capability": "chat",
+            "model_id": "gpt-4o-mini",
+            "provider": "openai",
+            "max_output_tokens": 64,
+            "input_chars": 5,
+        }
+        resp = client.post("/ingress/intent", json=payload)
+        assert resp.status_code == 202
+        snap = client.get("/snapshot").json()
+        intent = [event for event in snap["events"] if event["kind"] == "INTENT"][-1]
+        inputs = intent["payload"].get("inputs")
+        assert isinstance(inputs, dict)
+        assert inputs["principal_id"] == "user-1"
+        assert inputs["capability"] == "chat"
+        decision = [event for event in snap["events"] if event["kind"] == "DECISION"][-1]
+        payload = decision["payload"]
+        assert "reason_codes" in payload
+        assert "admission.missing_required" not in payload["reason_codes"]
+
+
 def test_policy_context_is_filtered(monkeypatch: pytest.MonkeyPatch) -> None:
     authoritative = {
         "stream_id": "default",
@@ -240,11 +294,20 @@ def test_policy_context_is_filtered(monkeypatch: pytest.MonkeyPatch) -> None:
         "actor": "user",
         "intent_type": "chat.message",
         "correlation_id": "c-1",
-        "payload": {"message": "hi"},
+        "payload": {
+            "message": "hi",
+            "inputs": {
+                "principal_id": "user-1",
+                "capability": "chat",
+                "correlation_id": "c-1",
+            },
+        },
         "extra_key": "should_not_pass",
     }
     context = governance._build_policy_context(authoritative)
-    assert set(context.inputs.keys()) == governance.ALLOWED_CONTEXT_KEYS
+    assert "correlation_id" not in context.inputs
+    assert "message" not in context.inputs
+    assert set(context.inputs.keys()) == {"principal_id", "capability"}
 
 
 def test_digest_excludes_obs_fields() -> None:
@@ -273,6 +336,7 @@ def test_digest_is_key_order_invariant() -> None:
 
 def test_snapshot_v_digest_is_paging_invariant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DBL_GATEWAY_DB", str(tmp_path / "trail.sqlite"))
+    monkeypatch.setenv("GATEWAY_EXEC_MODE", "external")
     app = create_app()
 
     with TestClient(app) as client:
@@ -381,6 +445,78 @@ def test_openai_error_message_propagates(monkeypatch: pytest.MonkeyPatch) -> Non
     result = asyncio.run(KlExecutionAdapter().run(intent_event))
     assert result.error is not None
     assert "Incorrect API key provided" in str(result.error.get("message"))
+
+
+def test_capabilities_response_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_CHAT_MODEL_IDS", "gpt-4o-mini")
+    app = create_app()
+    with TestClient(app) as client:
+        resp = client.get("/capabilities")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["interface_version"] == 1
+        assert data["surfaces"]["tail"] is True
+        assert data["surfaces"]["snapshot"] is True
+        assert data["surfaces"]["events"] is False
+        assert data["surfaces"]["ingress_intent"] is True
+        providers = data["providers"]
+        assert isinstance(providers, list)
+        assert providers and providers[0]["id"] == "openai"
+        model = providers[0]["models"][0]
+        assert "id" in model
+        assert "display_name" in model
+        assert "features" in model
+        assert "limits" in model
+        assert "health" in model
+
+
+def test_tail_since_semantics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DBL_GATEWAY_DB", str(tmp_path / "trail.sqlite"))
+    app = create_app()
+    with TestClient(app) as client:
+        resp = client.post("/ingress/intent", json=_intent_envelope("one"))
+        assert resp.status_code == 202
+        resp = client.post("/ingress/intent", json=_intent_envelope("two", model_id="gpt-4o-mini"))
+        assert resp.status_code == 202
+        tail_route = [r for r in app.router.routes if getattr(r, "path", "") == "/tail"][0]
+
+        async def _read_tail_once() -> dict[str, object]:
+            async def _receive():
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            scope = {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "method": "GET",
+                "path": "/tail",
+                "query_string": b"since=0",
+                "headers": [(b"x-dev-roles", b"gateway.snapshot.read")],
+                "client": ("testclient", 123),
+                "server": ("testserver", 80),
+                "scheme": "http",
+            }
+            request = Request(scope, _receive)
+            response = await tail_route.endpoint(request, stream_id=None, since=0, lanes=None)
+            body_iter = response.body_iterator
+            try:
+                async for chunk in body_iter:
+                    if not chunk:
+                        continue
+                    if isinstance(chunk, bytes):
+                        text = chunk.decode("utf-8", errors="replace")
+                    else:
+                        text = str(chunk)
+                    for line in text.splitlines():
+                        if line.startswith("data:"):
+                            return json.loads(line.replace("data:", "", 1).strip())
+            finally:
+                if hasattr(body_iter, "aclose"):
+                    await body_iter.aclose()
+            raise AssertionError("tail did not emit data")
+
+        data = asyncio.run(asyncio.wait_for(_read_tail_once(), timeout=2.0))
+        assert data["index"] > 0
 
 
 def test_replay_determinism_decision_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -9,7 +9,7 @@ from dbl_core import normalize_trace
 from ..ports.execution_port import ExecutionPort, ExecutionResult
 from ..providers import anthropic, openai
 from ..providers.errors import ProviderError
-from ..capabilities import resolve_provider
+from ..capabilities import resolve_model, resolve_provider
 
 
 @dataclass(frozen=True)
@@ -19,24 +19,37 @@ class KlExecutionAdapter(ExecutionPort):
         if not isinstance(payload, Mapping):
             return ExecutionResult(error={"message": "invalid payload"})
         requested_model_id = payload.get("requested_model_id")
-        model_id = str(requested_model_id) if requested_model_id else ""
-        provider, reason = resolve_provider(model_id)
-        if provider is None or reason is not None:
+        requested_model = str(requested_model_id) if requested_model_id else ""
+        resolved_model, reason = resolve_model(requested_model)
+        if resolved_model is None or reason is not None:
             return ExecutionResult(
-                provider=provider,
-                model_id=model_id,
-                error={"provider": provider, "message": reason or "model.unavailable"},
+                provider=None,
+                model_id="",
+                error={
+                    "code": "model_unavailable",
+                    "message": reason or "model.unavailable",
+                },
+            )
+        provider, provider_reason = resolve_provider(resolved_model)
+        if provider is None or provider_reason is not None:
+            return ExecutionResult(
+                provider=None,
+                model_id=resolved_model,
+                error={
+                    "code": "model_unavailable",
+                    "message": provider_reason or "model.unavailable",
+                },
             )
         message = _extract_message(payload)
         if message is None:
-            return ExecutionResult(provider=provider, model_id=model_id, error={"message": "input.invalid"})
+            return ExecutionResult(provider=provider, model_id=resolved_model, error={"message": "input.invalid"})
         call = _select_provider(provider)
         try:
-            output_text, trace, trace_digest, error = await _call_kernel(message, model_id, provider, call)
+            output_text, trace, trace_digest, error = await _call_kernel(message, resolved_model, provider, call)
             return ExecutionResult(
                 output_text=output_text,
                 provider=provider,
-                model_id=model_id,
+                model_id=resolved_model,
                 trace=trace,
                 trace_digest=trace_digest,
                 error=error,
@@ -44,7 +57,7 @@ class KlExecutionAdapter(ExecutionPort):
         except Exception:
             return ExecutionResult(
                 provider=provider,
-                model_id=model_id,
+                model_id=resolved_model,
                 error={
                     "provider": provider,
                     "message": "execution failed",

@@ -3,6 +3,11 @@
 ## Unreleased
 - Pending.
 
+## 0.3.3
+
+- Preserve chat.message payload.inputs through admission and policy evaluation
+- Startup configuration audit and eager policy load with dev fallback
+
 ## 0.3.2
 ### Changed
 - Stabilized gateway behavior and contracts within the existing 0.3.x stackline.

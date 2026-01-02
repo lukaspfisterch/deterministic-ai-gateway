@@ -1,4 +1,4 @@
-# DBL Gateway 0.3.2
+# DBL Gateway 0.3.3
 
 Authoritative DBL and KL gateway. This service is the single writer for append-only trails,
 applies policy via dbl-policy, and executes via kl-kernel-logic. UI and boundary services
@@ -8,8 +8,8 @@ This release stabilizes the 0.3.x stackline and does not introduce new wire cont
 
 Compatible stack versions:
 - dbl-core==0.3.2
-- dbl-policy==0.1.0
-- dbl-main==0.3.0
+- dbl-policy==0.2.2
+- dbl-main==0.3.1
 - kl-kernel-logic==0.5.0
 
 ## Quickstart (PowerShell)
@@ -44,6 +44,10 @@ Read:
 ## Environment contract
 
 See `docs/env_contract.md`.
+
+## Validation against dbl-reference
+
+See `docs/validation_workflow.md`.
 
 ## Notes
 

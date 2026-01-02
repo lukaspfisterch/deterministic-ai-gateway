@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dbl-gateway"
-version = "0.3.2"
+version = "0.3.3"
 description = "DBL Gateway"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,7 +12,7 @@ license = { text = "MIT" }
 
 dependencies = [
   "dbl-core>=0.3.2,<0.4.0",
-  "dbl-policy>=0.1.0,<0.2.0",
+  "dbl-policy>=0.2.0,<0.3.0",
   "dbl-main>=0.3.0,<0.4.0",
   "dbl-ingress>=0.1.1,<0.2.0",
   "kl-kernel-logic>=0.5.0,<0.6.0",
