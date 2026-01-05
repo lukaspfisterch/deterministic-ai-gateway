@@ -39,4 +39,3 @@ git commit --no-verify -m "hotfix"
 
 - Complete guide: `docs\GIT_HOOKS.md`
 - Implementation notes: `docs\HOOK_SUMMARY.md`
-- Constraints: `D:\DEV\projects\ensdg-corpus\AI_ASSISTANT_CONSTRAINTS.md`

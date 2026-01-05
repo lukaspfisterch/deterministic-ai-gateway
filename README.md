@@ -1,18 +1,31 @@
 # DBL Gateway
 
-Authoritative DBL and KL gateway. This service is the single writer for append-only trails,
-applies policy via dbl-policy, and executes via kl-kernel-logic. UI and boundary services
-consume its snapshots and emit INTENT only.
+Authoritative DBL and KL gateway.
+
+The gateway is the single writer for append-only trails. It admits INTENTs, evaluates policy via `dbl-policy`,
+and performs execution via `kl-kernel-logic`. UIs and boundary clients consume snapshots and emit INTENT only.
 
 This release stabilizes the 0.3.x stackline and does not introduce new wire contracts.
 
-Compatible stack versions:
+## Design Note
+
+This gateway is an attempt to make the use of AI admissible within a DBL-based architecture.
+
+The goal is not to explain or justify AI behavior, but to ensure that any AI-assisted actionis preceded by an explicit INTENT, governed by a DECISION, and recorded in an append-only trail.
+
+This allows AI components to be used as execution backends while preserving determinism, auditability, and decision primacy.
+
+The gateway does not make AI safe or correct.
+It makes AI usage observable, reviewable, and replayable.
+
+## Compatibility
+
 - dbl-core==0.3.6
 - dbl-policy==0.2.2
 - dbl-main==0.3.1
 - kl-kernel-logic==0.5.0
 
-## Quickstart (PowerShell)
+## Install (PowerShell)
 
 ```powershell
 py -3.11 -m venv .venv
@@ -20,75 +33,34 @@ py -3.11 -m venv .venv
 python -m pip install -e ".[dev]"
 ```
 
-Run the gateway:
+## Run (PowerShell)
+
 ```powershell
 dbl-gateway serve --db .\data\trail.sqlite --host 127.0.0.1 --port 8010
 ```
 
-Run with uvicorn:
+Alternative (uvicorn):
+
 ```powershell
 $env:DBL_GATEWAY_DB=".\data\trail.sqlite"
 py -3.11 -m uvicorn dbl_gateway.app:app --host 127.0.0.1 --port 8010
 ```
 
-## Quick start with OpenAI (development)
+## OpenAPI
 
-To execute chat intents via OpenAI, set an API key in the environment.
+When running locally:
 
-PowerShell (Windows):
-```powershell
-$env:OPENAI_API_KEY="sk-..."
-dbl-gateway serve --db .\data\trail.sqlite --host 127.0.0.1 --port 8010
-```
+- Swagger UI: http://127.0.0.1:8010/docs
+- OpenAPI JSON: http://127.0.0.1:8010/openapi.json
 
-Bash (macOS / Linux):
-```bash
-export OPENAI_API_KEY="sk-..."
-dbl-gateway serve --db ./data/trail.sqlite --host 127.0.0.1 --port 8010
-```
+Quick probes:
 
-Notes:
-- The key is used for execution only.
-- INTENT admission, DECISION generation, and canonicalization are provider-independent.
-- The key is not persisted and is not written to the trail.
-- Execution failures (missing or invalid key) are recorded as observational EXECUTION events.
-- DECISION events remain authoritative regardless of execution outcome.
+- Health: http://127.0.0.1:8010/healthz
+- Capabilities: http://127.0.0.1:8010/capabilities
+- Snapshot: http://127.0.0.1:8010/snapshot?offset=0&limit=50&stream_id=default
 
-## Local API docs (OpenAPI)
+## Emit an INTENT (PowerShell)
 
-When the gateway is running, the interactive API docs are available at:
-- Swagger UI: `http://127.0.0.1:8010/docs`
-- OpenAPI JSON: `http://127.0.0.1:8010/openapi.json`
-
-Quick verification:
-- Health: `http://127.0.0.1:8010/healthz`
-- Capabilities: `http://127.0.0.1:8010/capabilities`
-- Snapshot (first page): `http://127.0.0.1:8010/snapshot?offset=0&limit=50&stream_id=default`
-
-## Quick probes (PowerShell)
-
-Health:
-```powershell
-curl -s "http://127.0.0.1:8010/healthz"
-```
-
-Capabilities:
-```powershell
-curl -s "http://127.0.0.1:8010/capabilities"
-```
-
-Snapshot (page through the trail):
-```powershell
-curl -s "http://127.0.0.1:8010/snapshot?offset=0&limit=50&stream_id=default"
-curl -s "http://127.0.0.1:8010/snapshot?offset=50&limit=50&stream_id=default"
-```
-
-Tail (SSE stream):
-```powershell
-curl -N "http://127.0.0.1:8010/tail?since=0&stream_id=default"
-```
-
-Emit an INTENT (example):
 ```powershell
 $body = @{
   interface_version = 1
@@ -107,28 +79,69 @@ curl -s -X POST "http://127.0.0.1:8010/ingress/intent" `
   -d $body
 ```
 
-## Endpoints
+## OpenAI execution (development)
+
+To execute chat intents via OpenAI, set an API key in the environment.
+
+PowerShell (Windows):
+
+```powershell
+$env:OPENAI_API_KEY="sk-..."
+dbl-gateway serve --db .\data\trail.sqlite --host 127.0.0.1 --port 8010
+```
+
+Bash (macOS / Linux):
+
+```bash
+export OPENAI_API_KEY="sk-..."
+dbl-gateway serve --db ./data/trail.sqlite --host 127.0.0.1 --port 8010
+```
+
+Notes:
+
+- The key is used for execution only.
+- Admission, DECISION generation, canonicalization, and digests are provider-independent.
+- The key is not persisted and is not written to the trail.
+- Execution failures are recorded as observational EXECUTION events.
+- DECISION events remain authoritative regardless of execution outcome.
+
+## API surface
 
 Write:
-- POST `/ingress/intent`
+
+- `POST /ingress/intent`
 
 Read:
-- GET `/snapshot`
-- GET `/capabilities`
-- GET `/healthz`
 
-## Git Hooks (Windows 11)The repository includes an enhanced pre-commit hook that enforces DBL boundaries and invariants.**Quick usage (PowerShell):**```powershell# Normal commitgit commit -m "your message"# Explain mode (detailed violations)$env:DBL_HOOK_EXPLAIN = "1"; git commit -m "msg"# List validation rules$env:DBL_HOOK_LIST_RULES = "1"; git commit -m "test"```See `docs/GIT_HOOKS.md` for full documentation.**Key rules enforced:**- BOUNDARY-001: No canonicalization logic in gateway- EVENT-001: Only INTENT, DECISION, EXECUTION, PROOF event kinds- POLICY-001: No observational data in PolicyContext
-## Environment contract
+- `GET /snapshot`
+- `GET /capabilities`
+- `GET /healthz`
+- `GET /tail` (SSE)
 
-See `docs/env_contract.md`.
+## Git hooks
 
-## Validation against dbl-reference
+The repository includes an optional pre-commit hook that enforces DBL boundaries and invariants.
 
-See `docs/validation_workflow.md`.
+Quick usage (PowerShell):
 
-## Notes
+```powershell
+git commit -m "your message"
+$env:DBL_HOOK_EXPLAIN = "1"; git commit -m "msg"
+$env:DBL_HOOK_LIST_RULES = "1"; git commit -m "test"
+```
 
-- The gateway is the only component that performs governance and execution.
-- All stabilization is expressed explicitly via DECISION events.
-- Boundary and UI clients do not import dbl-core or dbl-policy.
-- The gateway uses dbl-core for canonicalization and digest computation.
+See docs/GIT_HOOKS.md for details.
+
+## Documentation
+
+- Environment contract: docs/env_contract.md
+- Validation workflow: docs/validation_workflow.md
+- Architecture: docs/ARCHITECTURE.md
+
+## Boundary notes
+
+The gateway is the only component that performs governance and execution.
+
+Boundary and UI clients must not import dbl-core or dbl-policy.
+
+Canonicalization and digests follow dbl-core.

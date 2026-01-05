@@ -3,6 +3,38 @@
 ## Unreleased
 - Pending.
 
+## 0.3.6
+### Changed
+- Internal stabilization of execution and snapshot handling.
+- Minor refinements in trail consistency and gateway lifecycle behavior.
+- Improved robustness around policy evaluation and execution orchestration.
+
+### Guarantees
+- No changes to wire contracts or `interface_version`.
+- No changes to event kinds, ordering, or canonicalization rules.
+- Decision primacy, replay determinism, and digest stability remain unchanged.
+- Fully compatible with the existing 0.3.x stackline.
+
+### Notes
+- This release is a maintenance and stabilization update.
+- No new features or behavioral extensions are introduced.
+
+## 0.3.5
+### Changed
+- Introduced `dbl-ingress` as a formalized admission surface for INTENT submission.
+- Consolidated ingress handling to enforce a single, well-defined entry point for writes.
+- Minor internal refactoring around admission flow without altering external behavior.
+
+### Guarantees
+- No changes to wire contracts or `interface_version`.
+- No changes to event kinds, ordering, or canonicalization rules.
+- Admission semantics remain deterministic and replay-safe.
+- Fully compatible with the existing 0.3.x stackline.
+
+### Notes
+- This release formalizes ingress responsibilities without introducing new capabilities.
+- Intended as a structural clarification, not a feature expansion.
+
 ## 0.3.3
 
 - Preserve chat.message payload.inputs through admission and policy evaluation
