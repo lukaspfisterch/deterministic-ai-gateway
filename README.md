@@ -1,5 +1,7 @@
 # DBL Gateway
 
+[![PyPI](https://img.shields.io/pypi/v/dbl-gateway.svg)](https://pypi.org/project/dbl-gateway/)
+
 Authoritative DBL and KL gateway.
 
 The gateway is the single writer for append-only trails. It admits INTENTs, evaluates policy via `dbl-policy`,
