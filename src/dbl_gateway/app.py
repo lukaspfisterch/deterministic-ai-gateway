@@ -16,9 +16,11 @@ from dbl_core.normalize.trace import sanitize_trace
 from dbl_core.events.trace_digest import trace_digest
 
 from .admission import admit_and_shape_intent, AdmissionFailure
+from .boundary import admit_model_messages
 from .capabilities import CapabilitiesResponse, get_capabilities, resolve_model, resolve_provider
 from .adapters.execution_adapter_kl import KlExecutionAdapter
 from .adapters.policy_adapter_dbl_policy import DblPolicyAdapter, _load_policy
+from .context_builder import build_context
 from .ports.execution_port import ExecutionResult
 from .ports.policy_port import DecisionResult
 from .models import EventRecord
@@ -115,10 +117,10 @@ def create_app() -> FastAPI:
         trace_id = uuid.uuid4().hex
         intent_payload = envelope["payload"]
         raw_payload = intent_payload["payload"]
-        payload_for_shape = raw_payload
+        payload_for_shape = dict(raw_payload)
+        payload_for_shape.update(_shape_identity(intent_payload))
         outer_inputs = intent_payload.get("inputs")
         if isinstance(outer_inputs, Mapping):
-            payload_for_shape = dict(raw_payload)
             payload_for_shape["inputs"] = dict(outer_inputs)
         shaped_payload = _shape_payload(intent_payload["intent_type"], payload_for_shape)
         try:
@@ -319,8 +321,18 @@ async def _process_intent(
     trace_id: str,
 ) -> None:
     decision_emitted = False
+    context_digest: str | None = None
+    boundary_context: dict[str, Any] | None = None
     try:
         authoritative = _authoritative_from_event(intent_event, correlation_id)
+        context_bundle = build_context(authoritative.get("payload"))
+        context_digest = context_bundle.get("context_digest")
+        admitted_model_messages, boundary_meta = admit_model_messages(context_bundle.get("model_messages"))
+        boundary_context = {
+            "context_digest": context_digest,
+            "admitted_model_messages": admitted_model_messages,
+            "meta": boundary_meta,
+        }
         try:
             decision = app.state.policy.decide(authoritative)
         except Exception as exc:
@@ -335,6 +347,8 @@ async def _process_intent(
                 payload=_decision_payload(
                     DecisionResult(decision="DENY", reason_codes=["evaluation_error"]),
                     trace_id,
+                    context_digest=context_digest,
+                    boundary=boundary_context,
                     requested_model_id=None,
                     resolved_model_id=None,
                     provider=None,
@@ -375,6 +389,8 @@ async def _process_intent(
                 requested_model_id=requested_model or None,
                 resolved_model_id=resolved_model or None,
                 provider=provider,
+                context_digest=context_digest,
+                boundary=boundary_context,
                 resolution_reason=resolution_reason,
             ),
         )
@@ -390,6 +406,8 @@ async def _process_intent(
                 trace_id,
                 requested_model_id=requested_model or None,
                 resolved_model_id=resolved_model or None,
+                context_digest=context_digest,
+                boundary=boundary_context,
             )
         except Exception as exc:
             trace, trace_digest_value = make_trace_bundle(
@@ -415,6 +433,9 @@ async def _process_intent(
                 "trace": trace,
                 "trace_digest": trace_digest_value,
             }
+            if context_digest:
+                payload["context_digest"] = context_digest
+            _attach_boundary_obs(payload, boundary_context, trace_id)
 
         app.state.store.append(
             kind="EXECUTION",
@@ -439,6 +460,8 @@ async def _process_intent(
             payload=_decision_payload(
                 DecisionResult(decision="DENY", reason_codes=["evaluation_error"]),
                 trace_id,
+                context_digest=context_digest,
+                boundary=boundary_context,
                 requested_model_id=None,
                 resolved_model_id=None,
                 provider=None,
@@ -454,6 +477,8 @@ def _decision_payload(
     resolved_model_id: str | None,
     provider: str | None,
     resolution_reason: str | None = None,
+    context_digest: str | None = None,
+    boundary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "decision": decision.decision,
@@ -465,11 +490,14 @@ def _decision_payload(
         payload["resolved_model_id"] = resolved_model_id
     if provider:
         payload["provider"] = provider
+    if context_digest:
+        payload["context_digest"] = context_digest
     if decision.policy_id:
         payload["policy_id"] = decision.policy_id
     if decision.policy_version is not None:
         payload["policy_version"] = str(decision.policy_version)
     _attach_obs_trace_id(payload, trace_id)
+    _attach_boundary_obs(payload, boundary, trace_id)
     if resolution_reason:
         obs = payload.get("_obs")
         if not isinstance(obs, dict):
@@ -485,6 +513,8 @@ def _execution_payload(
     *,
     requested_model_id: str | None,
     resolved_model_id: str | None,
+    context_digest: str | None = None,
+    boundary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "provider": result.provider,
@@ -499,6 +529,8 @@ def _execution_payload(
         payload["error"] = result.error
     else:
         payload["output_text"] = result.output_text or ""
+    if context_digest:
+        payload["context_digest"] = context_digest
 
     if isinstance(result.trace, Mapping):
         raw_trace = dict(result.trace)
@@ -515,6 +547,7 @@ def _execution_payload(
     trace, trace_digest_value = make_trace_bundle(raw_trace)
     payload["trace"] = trace
     payload["trace_digest"] = trace_digest_value
+    _attach_boundary_obs(payload, boundary, trace_id)
     return payload
 
 
@@ -667,9 +700,18 @@ def _attach_obs_trace_id(payload: dict[str, Any], trace_id: str) -> None:
     obs["trace_id"] = trace_id
 
 
+def _attach_boundary_obs(payload: dict[str, Any], boundary: Mapping[str, Any] | None, trace_id: str) -> None:
+    if not boundary:
+        return
+    _attach_obs_trace_id(payload, trace_id)
+    obs = payload.get("_obs")
+    if isinstance(obs, dict):
+        obs["boundary"] = boundary
+
+
 def _shape_payload(intent_type: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     if intent_type == "chat.message":
-        shaped: dict[str, Any] = {}
+        shaped: dict[str, Any] = _shape_identity(payload)
         message = payload.get("message")
         if isinstance(message, str):
             shaped["message"] = message
@@ -681,6 +723,20 @@ def _shape_payload(intent_type: str, payload: Mapping[str, Any]) -> dict[str, An
             shaped["inputs"] = dict(inputs)
         return shaped
     return dict(payload)
+
+
+def _shape_identity(source: Mapping[str, Any]) -> dict[str, str]:
+    shaped: dict[str, str] = {}
+    thread_id = source.get("thread_id")
+    turn_id = source.get("turn_id")
+    parent_turn_id = source.get("parent_turn_id")
+    if isinstance(thread_id, str) and thread_id.strip():
+        shaped["thread_id"] = thread_id.strip()
+    if isinstance(turn_id, str) and turn_id.strip():
+        shaped["turn_id"] = turn_id.strip()
+    if isinstance(parent_turn_id, str) and parent_turn_id.strip():
+        shaped["parent_turn_id"] = parent_turn_id.strip()
+    return shaped
 
 
 def _thaw_json(value: Any) -> Any:

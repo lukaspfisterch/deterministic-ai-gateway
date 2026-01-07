@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Mapping, TypedDict
 
 
-INTERFACE_VERSION = 1
+INTERFACE_VERSION = 2
 
 
 class IntentPayload(TypedDict):
@@ -11,6 +11,9 @@ class IntentPayload(TypedDict):
     lane: str
     actor: str
     intent_type: str
+    thread_id: str
+    turn_id: str
+    parent_turn_id: str | None
     payload: dict[str, Any]
     requested_model_id: str | None
     inputs: dict[str, Any] | None
@@ -30,6 +33,7 @@ class DecisionPayload(TypedDict, total=False):
     provider: str
     policy_id: str
     policy_version: str
+    context_digest: str
     _obs: dict[str, Any]
 
 
@@ -42,6 +46,8 @@ class ExecutionPayload(TypedDict, total=False):
     error: dict[str, Any]
     trace: dict[str, Any]
     trace_digest: str
+    context_digest: str
+    _obs: dict[str, Any]
 
 
 class EventRecord(TypedDict):
@@ -95,6 +101,9 @@ def parse_intent_envelope(body: Mapping[str, Any]) -> IntentEnvelope:
     lane = payload.get("lane")
     actor = payload.get("actor")
     intent_type = payload.get("intent_type")
+    thread_id = payload.get("thread_id")
+    turn_id = payload.get("turn_id")
+    parent_turn_id = payload.get("parent_turn_id")
     inner_payload = payload.get("payload")
     inputs = payload.get("inputs")
     if not isinstance(stream_id, str) or stream_id.strip() == "":
@@ -105,6 +114,12 @@ def parse_intent_envelope(body: Mapping[str, Any]) -> IntentEnvelope:
         raise ValueError("payload.actor must be a non-empty string")
     if not isinstance(intent_type, str) or intent_type.strip() == "":
         raise ValueError("payload.intent_type must be a non-empty string")
+    if not isinstance(thread_id, str) or thread_id.strip() == "":
+        raise ValueError("payload.thread_id must be a non-empty string")
+    if not isinstance(turn_id, str) or turn_id.strip() == "":
+        raise ValueError("payload.turn_id must be a non-empty string")
+    if parent_turn_id is not None and not isinstance(parent_turn_id, str):
+        raise ValueError("payload.parent_turn_id must be a string")
     if not isinstance(inner_payload, Mapping):
         raise ValueError("payload.payload must be an object")
     requested_model_id = payload.get("requested_model_id")
@@ -120,6 +135,9 @@ def parse_intent_envelope(body: Mapping[str, Any]) -> IntentEnvelope:
             "lane": lane.strip(),
             "actor": actor.strip(),
             "intent_type": intent_type.strip(),
+            "thread_id": thread_id.strip(),
+            "turn_id": turn_id.strip(),
+            "parent_turn_id": parent_turn_id.strip() if isinstance(parent_turn_id, str) else None,
             "payload": dict(inner_payload),
             "requested_model_id": requested_model_id.strip() if isinstance(requested_model_id, str) else None,
             "inputs": dict(inputs) if isinstance(inputs, Mapping) else None,

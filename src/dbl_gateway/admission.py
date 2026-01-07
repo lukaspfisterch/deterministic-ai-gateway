@@ -39,6 +39,9 @@ def admit_and_shape_intent(payload: Mapping[str, Any], *, raw_payload: Mapping[s
     if observational is not None and not isinstance(observational, Mapping):
         raise AdmissionFailure(reason_code=ADMISSION_INVALID_INPUT, detail="observational must be an object if provided")
 
+    deterministic_payload = deterministic.get("payload")
+    _require_identity_anchors(deterministic_payload)
+
     try:
         record = shape_input(
             correlation_id=correlation_id,
@@ -65,3 +68,15 @@ def _contains_secrets(value: object) -> bool:
     if isinstance(value, list):
         return any(_contains_secrets(item) for item in value)
     return False
+
+
+def _require_identity_anchors(payload: object) -> None:
+    if not isinstance(payload, Mapping):
+        raise AdmissionFailure(reason_code=ADMISSION_INVALID_INPUT, detail="payload must be an object")
+    for key in ("thread_id", "turn_id"):
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise AdmissionFailure(reason_code=ADMISSION_INVALID_INPUT, detail=f"{key} must be a non-empty string")
+    parent = payload.get("parent_turn_id")
+    if parent is not None and not isinstance(parent, str):
+        raise AdmissionFailure(reason_code=ADMISSION_INVALID_INPUT, detail="parent_turn_id must be a string when provided")

@@ -48,6 +48,9 @@ def _intent_envelope(
             "lane": "user_chat",
             "actor": "user",
             "intent_type": intent_type,
+            "thread_id": "thread-1",
+            "turn_id": "turn-1",
+            "parent_turn_id": None,
             "requested_model_id": model_id,
             "payload": payload,
         },
@@ -523,7 +526,7 @@ def test_capabilities_response_shape(monkeypatch: pytest.MonkeyPatch) -> None:
         resp = client.get("/capabilities")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["interface_version"] == 1
+        assert data["interface_version"] == INTERFACE_VERSION
         assert data["surfaces"]["tail"] is True
         assert data["surfaces"]["snapshot"] is True
         assert data["surfaces"]["events"] is False
