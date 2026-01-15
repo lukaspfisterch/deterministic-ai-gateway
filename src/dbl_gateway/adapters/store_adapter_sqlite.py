@@ -19,6 +19,9 @@ class SQLiteStoreAdapter(StorePort):
         self,
         *,
         kind: str,
+        thread_id: str,
+        turn_id: str,
+        parent_turn_id: str | None,
         lane: str,
         actor: str,
         intent_type: str,
@@ -28,6 +31,9 @@ class SQLiteStoreAdapter(StorePort):
     ):
         return self._store.append(
             kind=kind,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            parent_turn_id=parent_turn_id,
             lane=lane,
             actor=actor,
             intent_type=intent_type,
@@ -50,6 +56,14 @@ class SQLiteStoreAdapter(StorePort):
             stream_id=stream_id,
             lane=lane,
         )
+
+    def timeline(
+        self,
+        *,
+        thread_id: str,
+        include_payload: bool = False,
+    ):
+        return self._store.timeline(thread_id=thread_id, include_payload=include_payload)
 
     def close(self) -> None:
         self._store.close()

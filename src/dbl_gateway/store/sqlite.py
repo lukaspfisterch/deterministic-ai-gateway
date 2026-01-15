@@ -4,12 +4,32 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from ..digest import v_digest, v_digest_step
+
+
+class ParentValidationError(ValueError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 from ..event_builder import make_event
 
 from ..models import EventRecord, Snapshot
+
+
+class PayloadDecodeError(RuntimeError):
+    def __init__(self, *, idx: int, kind: str, correlation_id: str, payload_prefix: str, error: Exception) -> None:
+        message = (
+            f"failed to decode payload_json for idx={idx}, kind={kind}, correlation_id={correlation_id}: "
+            f"{error}; payload_json_prefix={payload_prefix!r}"
+        )
+        super().__init__(message)
+        self.idx = idx
+        self.kind = kind
+        self.correlation_id = correlation_id
+        self.payload_prefix = payload_prefix
+        self.__cause__ = error
 
 
 class SQLiteStore:
@@ -17,6 +37,7 @@ class SQLiteStore:
         self._db_path = db_path
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA synchronous=NORMAL;")
         self._init_schema()
@@ -32,6 +53,9 @@ class SQLiteStore:
                     idx INTEGER PRIMARY KEY AUTOINCREMENT,
                     kind TEXT NOT NULL,
                     lane TEXT NOT NULL,
+                    thread_id TEXT NOT NULL DEFAULT '',
+                    turn_id TEXT NOT NULL DEFAULT '',
+                    parent_turn_id TEXT,
                     actor TEXT NOT NULL,
                     intent_type TEXT NOT NULL,
                     stream_id TEXT NOT NULL,
@@ -44,6 +68,9 @@ class SQLiteStore:
                 """
             )
             self._ensure_column("events", "lane", "TEXT NOT NULL DEFAULT 'unknown'")
+            self._ensure_column("events", "thread_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("events", "turn_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("events", "parent_turn_id", "TEXT")
             self._ensure_column("events", "actor", "TEXT NOT NULL DEFAULT 'unknown'")
             self._ensure_column("events", "intent_type", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column("events", "stream_id", "TEXT NOT NULL DEFAULT 'default'")
@@ -75,6 +102,9 @@ class SQLiteStore:
         self,
         *,
         kind: str,
+        thread_id: str,
+        turn_id: str,
+        parent_turn_id: str | None,
         lane: str,
         actor: str,
         intent_type: str,
@@ -82,17 +112,24 @@ class SQLiteStore:
         correlation_id: str,
         payload: dict[str, object],
     ) -> EventRecord:
+        if not isinstance(payload, (dict, Mapping)):
+            raise TypeError(f"payload must be a dict; got {type(payload).__name__}")
+        payload_obj: dict[str, object] = dict(payload)
+        self._validate_parent(thread_id, turn_id, parent_turn_id)
         event = make_event(
             kind=kind,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            parent_turn_id=parent_turn_id,
             lane=lane,
             actor=actor,
             intent_type=intent_type,
             stream_id=stream_id,
             correlation_id=correlation_id,
-            payload=payload,
+            payload=payload_obj,
         )
         payload_json = json.dumps(
-            payload,
+            payload_obj,
             ensure_ascii=True,
             sort_keys=True,
             separators=(",", ":"),
@@ -105,6 +142,9 @@ class SQLiteStore:
                 INSERT INTO events (
                     kind,
                     lane,
+                    thread_id,
+                    turn_id,
+                    parent_turn_id,
                     actor,
                     intent_type,
                     stream_id,
@@ -114,11 +154,14 @@ class SQLiteStore:
                     canon_len,
                     created_at_utc
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     kind,
                     lane,
+                    thread_id,
+                    turn_id,
+                    parent_turn_id,
                     actor,
                     intent_type,
                     stream_id,
@@ -141,6 +184,86 @@ class SQLiteStore:
             )
         event["index"] = index
         return event
+
+    def timeline(self, *, thread_id: str, include_payload: bool = False) -> list[EventRecord]:
+        columns = [
+            "idx",
+            "kind",
+            "lane",
+            "thread_id",
+            "turn_id",
+            "parent_turn_id",
+            "actor",
+            "intent_type",
+            "stream_id",
+            "correlation_id",
+            "payload_json",
+            "digest",
+            "canon_len",
+        ]
+        rows = self._conn.execute(
+            f"SELECT {', '.join(columns)} FROM events WHERE thread_id = ? ORDER BY idx ASC",
+            (thread_id,),
+        ).fetchall()
+        events: list[EventRecord] = []
+        for row in rows:
+            payload_json = row["payload_json"]
+            payload: dict[str, Any] | None = None
+            try:
+                payload = json.loads(payload_json)
+            except json.JSONDecodeError as exc:
+                prefix = str(payload_json)[:200]
+                raise PayloadDecodeError(
+                    idx=int(row["idx"]),
+                    kind=str(row["kind"]),
+                    correlation_id=str(row["correlation_id"]),
+                    payload_prefix=prefix,
+                    error=exc,
+                ) from exc
+            event: EventRecord = {
+                "index": max(0, int(row["idx"]) - 1),
+                "kind": str(row["kind"]),
+                "lane": str(row["lane"]),
+                "thread_id": str(row["thread_id"]),
+                "turn_id": str(row["turn_id"]),
+                "parent_turn_id": row["parent_turn_id"] if row["parent_turn_id"] is None else str(row["parent_turn_id"]),
+                "actor": str(row["actor"]),
+                "intent_type": str(row["intent_type"]),
+                "stream_id": str(row["stream_id"]),
+                "correlation_id": str(row["correlation_id"]),
+                "digest": str(row["digest"]),
+                "canon_len": int(row["canon_len"]),
+                "is_authoritative": str(row["kind"]) == "DECISION",
+            }
+            event["payload"] = payload
+            events.append(event)
+        return events
+
+    def _validate_parent(self, thread_id: str, turn_id: str, parent_turn_id: str | None) -> None:
+        if parent_turn_id is None:
+            return
+        if parent_turn_id == "":
+            return
+        if parent_turn_id == turn_id:
+            raise ParentValidationError("parent_turn_id cannot equal turn_id")
+        rows = self._conn.execute(
+            "SELECT turn_id, parent_turn_id FROM events WHERE thread_id = ? ORDER BY idx ASC",
+            (thread_id,),
+        ).fetchall()
+        parent_map: dict[str, str | None] = {}
+        for row in rows:
+            parent_map[str(row["turn_id"])] = (
+                None if row["parent_turn_id"] is None else str(row["parent_turn_id"])
+            )
+        if parent_turn_id not in parent_map:
+            raise ParentValidationError("parent_turn_id missing")
+        visited = {turn_id}
+        current = parent_turn_id
+        while current is not None:
+            if current in visited:
+                raise ParentValidationError("parent_turn_id introduces cycle")
+            visited.add(current)
+            current = parent_map.get(current)
 
     def snapshot(
         self,
@@ -175,10 +298,22 @@ class SQLiteStore:
         stream_id: str | None,
         lane: str | None,
     ) -> list[EventRecord]:
-        query = (
-            "SELECT idx, kind, lane, actor, intent_type, stream_id, correlation_id, "
-            "payload_json, digest, canon_len FROM events"
-        )
+        columns = [
+            "idx",
+            "kind",
+            "lane",
+            "thread_id",
+            "turn_id",
+            "parent_turn_id",
+            "actor",
+            "intent_type",
+            "stream_id",
+            "correlation_id",
+            "payload_json",
+            "digest",
+            "canon_len",
+        ]
+        query = f"SELECT {', '.join(columns)} FROM events"
         params: list[Any] = []
         filters: list[str] = []
         if stream_id:
@@ -194,20 +329,34 @@ class SQLiteStore:
         rows = self._conn.execute(query, params).fetchall()
         events: list[EventRecord] = []
         for row in rows:
-            payload = json.loads(row[7])
+            payload_json = row["payload_json"]
+            try:
+                payload = json.loads(payload_json)
+            except json.JSONDecodeError as exc:
+                prefix = str(payload_json)[:200]
+                raise PayloadDecodeError(
+                    idx=int(row["idx"]),
+                    kind=str(row["kind"]),
+                    correlation_id=str(row["correlation_id"]),
+                    payload_prefix=prefix,
+                    error=exc,
+                ) from exc
             events.append(
                 {
-                    "index": max(0, int(row[0]) - 1),
-                    "kind": str(row[1]),
-                    "lane": str(row[2]),
-                    "actor": str(row[3]),
-                    "intent_type": str(row[4]),
-                    "stream_id": str(row[5]),
-                    "correlation_id": str(row[6]),
+                    "index": max(0, int(row["idx"]) - 1),
+                    "kind": str(row["kind"]),
+                    "lane": str(row["lane"]),
+                    "thread_id": str(row["thread_id"]),
+                    "turn_id": str(row["turn_id"]),
+                    "parent_turn_id": row["parent_turn_id"] if row["parent_turn_id"] is None else str(row["parent_turn_id"]),
+                    "actor": str(row["actor"]),
+                    "intent_type": str(row["intent_type"]),
+                    "stream_id": str(row["stream_id"]),
+                    "correlation_id": str(row["correlation_id"]),
                     "payload": payload,
-                    "digest": str(row[8]),
-                    "canon_len": int(row[9]),
-                    "is_authoritative": str(row[1]) == "DECISION",
+                    "digest": str(row["digest"]),
+                    "canon_len": int(row["canon_len"]),
+                    "is_authoritative": str(row["kind"]) == "DECISION",
                 }
             )
         return events

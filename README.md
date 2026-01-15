@@ -42,6 +42,11 @@ Boundaries are deterministic decisions, not heuristics:
 - Reconstructing application state from events
 - Explaining policies to end users
 
+## Thread timeline and replay
+- Timeline endpoint: `GET /threads/{thread_id}/timeline` lists turns and event digests in deterministic order.
+- Parent rules: each `parent_turn_id`, when present, must exist in the same thread, cannot equal `turn_id`, and cycles are rejected.
+- DECISION artifacts are replayable offline using stored context_spec/assembled_context and the recorded policy identity.
+
 ## Status
 Early, moving fast. Canon and invariants first.
 

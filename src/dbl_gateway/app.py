@@ -7,7 +7,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,16 +16,17 @@ from dbl_core.normalize.trace import sanitize_trace
 from dbl_core.events.trace_digest import trace_digest
 
 from .admission import admit_and_shape_intent, AdmissionFailure
-from .boundary import admit_model_messages
 from .capabilities import CapabilitiesResponse, get_capabilities, resolve_model, resolve_provider
 from .adapters.execution_adapter_kl import KlExecutionAdapter
 from .adapters.policy_adapter_dbl_policy import DblPolicyAdapter, _load_policy
 from .context_builder import build_context
+from .decision_builder import build_normative_decision
 from .ports.execution_port import ExecutionResult
 from .ports.policy_port import DecisionResult
 from .models import EventRecord
 from .projection import project_runner_state, state_payload
 from .store.factory import create_store
+from .store.sqlite import ParentValidationError
 from .wire_contract import parse_intent_envelope
 from .auth import (
     Actor,
@@ -50,23 +51,34 @@ def _configure_logging() -> None:
     _LOGGER.setLevel(logging.INFO)
 
 
-def create_app() -> FastAPI:
+def create_app(*, start_workers: bool = True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         _configure_logging()
         _audit_env()
         policy = _load_policy_with_fallback()
-        app.state.store = create_store()
+        store = create_store()
+        work_queue = asyncio.Queue(maxsize=_work_queue_max()) if start_workers else None
+        app.state.store = store
         app.state.policy = DblPolicyAdapter(policy=policy)
         app.state.execution = KlExecutionAdapter()
-        app.state.work_queue = asyncio.Queue(maxsize=_work_queue_max())
-        app.state.worker_task = asyncio.create_task(_work_queue_loop(app))
+        app.state.work_queue = work_queue
+        app.state.worker_tasks: list[asyncio.Task] = []
         app.state.start_time = time.monotonic()
+        if start_workers and work_queue is not None:
+            worker = asyncio.create_task(_work_queue_loop(app, work_queue))
+            app.state.worker_tasks.append(worker)
         try:
             yield
         finally:
-            app.state.worker_task.cancel()
-            app.state.store.close()
+            for task in getattr(app.state, "worker_tasks", []):
+                task.cancel()
+            for task in getattr(app.state, "worker_tasks", []):
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            store.close()
 
     app = FastAPI(title="DBL Gateway", lifespan=lifespan)
     app.add_middleware(
@@ -152,18 +164,34 @@ def create_app() -> FastAPI:
             payload_map.setdefault("inputs", dict(outer_inputs))
             authoritative["payload"] = payload_map
         _attach_obs_trace_id(authoritative["payload"], trace_id)
-        intent_event = app.state.store.append(
-            kind="INTENT",
-            lane=authoritative["lane"],
-            actor=authoritative["actor"],
-            intent_type=authoritative["intent_type"],
-            stream_id=authoritative["stream_id"],
-            correlation_id=envelope["correlation_id"],
-            payload=authoritative["payload"],
-        )
-
+        thread_id, turn_id, parent_turn_id = _require_anchors(authoritative.get("payload", {}))
         try:
-            app.state.work_queue.put_nowait((intent_event, envelope["correlation_id"], trace_id))
+            intent_event = app.state.store.append(
+                kind="INTENT",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                parent_turn_id=parent_turn_id,
+                lane=authoritative["lane"],
+                actor=authoritative["actor"],
+                intent_type=authoritative["intent_type"],
+                stream_id=authoritative["stream_id"],
+                correlation_id=envelope["correlation_id"],
+                payload=authoritative["payload"],
+            )
+        except ParentValidationError as exc:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "reason_code": "admission.invalid_parent", "detail": str(exc)},
+            )
+
+        work_queue = getattr(app.state, "work_queue", None)
+        if work_queue is None:
+            return JSONResponse(
+                status_code=503,
+                content={"accepted": False, "reason_code": "workers.stopped", "detail": "work queue unavailable"},
+            )
+        try:
+            work_queue.put_nowait((intent_event, envelope["correlation_id"], trace_id))
         except asyncio.QueueFull:
             return JSONResponse(
                 status_code=503,
@@ -197,6 +225,47 @@ def create_app() -> FastAPI:
             stream_id=_normalize_optional_str(stream_id, "stream_id"),
             lane=_normalize_optional_str(lane, "lane"),
         )
+
+    @app.get("/threads/{thread_id}/timeline")
+    async def thread_timeline(
+        request: Request,
+        thread_id: str,
+        include_payload: bool = Query(False),
+    ) -> dict[str, Any]:
+        actor = await _require_actor(request)
+        _require_role(actor, ["gateway.snapshot.read"])
+        thread_id_norm = thread_id.strip()
+        if not thread_id_norm:
+            raise HTTPException(status_code=400, detail="thread_id must be a non-empty string")
+        events = app.state.store.timeline(thread_id=thread_id_norm, include_payload=True)
+        turns: dict[str, dict[str, Any]] = {}
+        for event in events:
+            tid = str(event.get("turn_id") or "")
+            parent = event.get("parent_turn_id")
+            turn = turns.get(tid)
+            if turn is None:
+                turn = {"turn_id": tid, "parent_turn_id": parent, "events": [], "_first_idx": event["index"]}
+                turns[tid] = turn
+            turn["_first_idx"] = min(turn["_first_idx"], event["index"])
+            payload = event.get("payload") or {}
+            entry: dict[str, Any] = {
+                "idx": event["index"],
+                "kind": event["kind"],
+                "correlation_id": event.get("correlation_id"),
+            }
+            ctx_digest = payload.get("context_digest")
+            if isinstance(ctx_digest, str):
+                entry["context_digest"] = ctx_digest
+            if event.get("kind") == "DECISION" and isinstance(event.get("digest"), str):
+                entry["decision_digest"] = event["digest"]
+            if include_payload:
+                entry["payload"] = payload
+            turn["events"].append(entry)
+        ordered_turns = sorted(turns.values(), key=lambda t: (t["_first_idx"], t["turn_id"]))
+        for turn in ordered_turns:
+            turn.pop("_first_idx", None)
+            turn["events"] = sorted(turn["events"], key=lambda e: (e["idx"], e["kind"], e["correlation_id"]))
+        return {"thread_id": thread_id_norm, "turns": ordered_turns}
 
     @app.get("/tail")
     async def tail(
@@ -300,15 +369,22 @@ def create_app() -> FastAPI:
             )
         p["trace"] = trace
         p["trace_digest"] = trace_digest_value
-        event = app.state.store.append(
-            kind="EXECUTION",
-            lane=lane,
-            actor=actor,
-            intent_type=intent_type,
-            stream_id=stream_id,
-            correlation_id=correlation_id,
-            payload=p,
-        )
+        thread_id, turn_id, parent_turn_id = _require_anchors(p)
+        try:
+            event = app.state.store.append(
+                kind="EXECUTION",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                parent_turn_id=parent_turn_id,
+                lane=lane,
+                actor=actor,
+                intent_type=intent_type,
+                stream_id=stream_id,
+                correlation_id=correlation_id,
+                payload=p,
+            )
+        except ParentValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "execution_index": event["index"]}
 
     return app
@@ -320,18 +396,29 @@ async def _process_intent(
     correlation_id: str,
     trace_id: str,
 ) -> None:
+    thread_id, turn_id, parent_turn_id = _anchors_for_event(intent_event)
     decision_emitted = False
     context_digest: str | None = None
     boundary_context: dict[str, Any] | None = None
+    context_transforms: list[dict[str, Any]] = []
+    context_spec: Mapping[str, Any] | None = None
+    assembled_context: Mapping[str, Any] | None = None
     try:
         authoritative = _authoritative_from_event(intent_event, correlation_id)
-        context_bundle = build_context(authoritative.get("payload"))
-        context_digest = context_bundle.get("context_digest")
-        admitted_model_messages, boundary_meta = admit_model_messages(context_bundle.get("model_messages"))
+        context_artifacts = build_context(
+            authoritative.get("payload"),
+            intent_type=str(authoritative.get("intent_type") or ""),
+        )
+        context_digest = context_artifacts.context_digest
+        context_transforms = list(context_artifacts.transforms)
+        context_spec = context_artifacts.context_spec
+        assembled_context = context_artifacts.assembled_context
         boundary_context = {
             "context_digest": context_digest,
-            "admitted_model_messages": admitted_model_messages,
-            "meta": boundary_meta,
+            "context_spec": context_spec,
+            "assembled_context": assembled_context,
+            "admitted_model_messages": assembled_context.get("model_messages", []),
+            "meta": context_artifacts.boundary_meta,
         }
         try:
             decision = app.state.policy.decide(authoritative)
@@ -339,6 +426,9 @@ async def _process_intent(
             _LOGGER.exception("policy decision failed: %s", exc)
             app.state.store.append(
                 kind="DECISION",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                parent_turn_id=parent_turn_id,
                 lane=authoritative["lane"],
                 actor="policy",
                 intent_type=authoritative["intent_type"],
@@ -352,6 +442,9 @@ async def _process_intent(
                     requested_model_id=None,
                     resolved_model_id=None,
                     provider=None,
+                    transforms=context_transforms,
+                    context_spec=context_spec,
+                    assembled_context=assembled_context,
                 ),
             )
             return
@@ -378,6 +471,9 @@ async def _process_intent(
 
         app.state.store.append(
             kind="DECISION",
+            thread_id=thread_id,
+            turn_id=turn_id,
+            parent_turn_id=parent_turn_id,
             lane=authoritative["lane"],
             actor="policy",
             intent_type=authoritative["intent_type"],
@@ -392,6 +488,9 @@ async def _process_intent(
                 context_digest=context_digest,
                 boundary=boundary_context,
                 resolution_reason=resolution_reason,
+                transforms=context_transforms,
+                context_spec=context_spec,
+                assembled_context=assembled_context,
             ),
         )
         decision_emitted = True
@@ -439,6 +538,9 @@ async def _process_intent(
 
         app.state.store.append(
             kind="EXECUTION",
+            thread_id=thread_id,
+            turn_id=turn_id,
+            parent_turn_id=parent_turn_id,
             lane=intent_event["lane"],
             actor="executor",
             intent_type=intent_event["intent_type"],
@@ -452,6 +554,9 @@ async def _process_intent(
             return
         app.state.store.append(
             kind="DECISION",
+            thread_id=thread_id,
+            turn_id=turn_id,
+            parent_turn_id=parent_turn_id,
             lane=intent_event["lane"],
             actor="policy",
             intent_type=intent_event["intent_type"],
@@ -465,6 +570,9 @@ async def _process_intent(
                 requested_model_id=None,
                 resolved_model_id=None,
                 provider=None,
+                transforms=context_transforms,
+                context_spec=context_spec,
+                assembled_context=assembled_context,
             ),
         )
 
@@ -479,23 +587,35 @@ def _decision_payload(
     resolution_reason: str | None = None,
     context_digest: str | None = None,
     boundary: Mapping[str, Any] | None = None,
+    transforms: Sequence[Mapping[str, Any]] | None = None,
+    context_spec: Mapping[str, Any] | None = None,
+    assembled_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    normative = build_normative_decision(
+        decision,
+        context_digest=context_digest,
+        transforms=transforms,
+    )
     payload: dict[str, Any] = {
         "decision": decision.decision,
-        "reason_codes": decision.reason_codes,
+        "reason_codes": decision.reason_codes or [],
+        "policy_id": normative["policy"]["policy_id"],
+        "policy_version": normative["policy"]["policy_version"],
+        **normative,
     }
+    if context_spec is not None:
+        payload["context_spec"] = context_spec
+    if assembled_context is not None:
+        payload["assembled_context"] = assembled_context
     if requested_model_id:
-        payload["requested_model_id"] = requested_model_id
+        payload.setdefault("_obs", {})  # keep out of normative digest
+        payload["_obs"]["requested_model_id"] = requested_model_id
     if resolved_model_id:
-        payload["resolved_model_id"] = resolved_model_id
+        payload.setdefault("_obs", {})
+        payload["_obs"]["resolved_model_id"] = resolved_model_id
     if provider:
-        payload["provider"] = provider
-    if context_digest:
-        payload["context_digest"] = context_digest
-    if decision.policy_id:
-        payload["policy_id"] = decision.policy_id
-    if decision.policy_version is not None:
-        payload["policy_version"] = str(decision.policy_version)
+        payload.setdefault("_obs", {})
+        payload["_obs"]["provider"] = provider
     _attach_obs_trace_id(payload, trace_id)
     _attach_boundary_obs(payload, boundary, trace_id)
     if resolution_reason:
@@ -596,13 +716,16 @@ def _work_queue_max() -> int:
     return 100
 
 
-async def _work_queue_loop(app: FastAPI) -> None:
-    while True:
-        intent_event, correlation_id, trace_id = await app.state.work_queue.get()
-        try:
-            await _process_intent(app, intent_event, correlation_id, trace_id)
-        except Exception as exc:
-            _LOGGER.exception("worker task failed: %s", exc)
+async def _work_queue_loop(app: FastAPI, work_queue: asyncio.Queue) -> None:
+    try:
+        while True:
+            intent_event, correlation_id, trace_id = await work_queue.get()
+            try:
+                await _process_intent(app, intent_event, correlation_id, trace_id)
+            except Exception as exc:
+                _LOGGER.exception("worker task failed: %s", exc)
+    except asyncio.CancelledError:
+        raise
 
 
 def _audit_env() -> None:
@@ -737,6 +860,35 @@ def _shape_identity(source: Mapping[str, Any]) -> dict[str, str]:
     if isinstance(parent_turn_id, str) and parent_turn_id.strip():
         shaped["parent_turn_id"] = parent_turn_id.strip()
     return shaped
+
+
+def _require_anchors(payload: Mapping[str, Any]) -> tuple[str, str, str | None]:
+    thread_id = payload.get("thread_id")
+    turn_id = payload.get("turn_id")
+    parent_turn_id = payload.get("parent_turn_id")
+    if not isinstance(thread_id, str) or not thread_id.strip():
+        raise HTTPException(status_code=400, detail="thread_id is required")
+    if not isinstance(turn_id, str) or not turn_id.strip():
+        raise HTTPException(status_code=400, detail="turn_id is required")
+    parent_value: str | None = None
+    if parent_turn_id is not None:
+        if not isinstance(parent_turn_id, str):
+            raise HTTPException(status_code=400, detail="parent_turn_id must be a string when provided")
+        parent_value = parent_turn_id.strip()
+    return thread_id.strip(), turn_id.strip(), parent_value
+
+
+def _anchors_for_event(event: EventRecord) -> tuple[str, str, str | None]:
+    thread_id = event.get("thread_id")
+    turn_id = event.get("turn_id")
+    parent_turn_id = event.get("parent_turn_id")
+    if isinstance(thread_id, str) and thread_id.strip() and isinstance(turn_id, str) and turn_id.strip():
+        parent_value = parent_turn_id if parent_turn_id is None else str(parent_turn_id)
+        return thread_id.strip(), turn_id.strip(), parent_value
+    payload = event.get("payload")
+    if isinstance(payload, Mapping):
+        return _require_anchors(payload)
+    raise HTTPException(status_code=400, detail="event missing identity anchors")
 
 
 def _thaw_json(value: Any) -> Any:

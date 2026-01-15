@@ -10,6 +10,9 @@ class StorePort(Protocol):
         self,
         *,
         kind: str,
+        thread_id: str,
+        turn_id: str,
+        parent_turn_id: str | None,
         lane: str,
         actor: str,
         intent_type: str,
@@ -27,6 +30,14 @@ class StorePort(Protocol):
         stream_id: str | None = None,
         lane: str | None = None,
     ) -> Snapshot:
+        ...
+
+    def timeline(
+        self,
+        *,
+        thread_id: str,
+        include_payload: bool = False,
+    ) -> list[EventRecord]:
         ...
 
     def close(self) -> None:

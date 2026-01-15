@@ -77,7 +77,7 @@ def _select_provider(name: str):
     raise RuntimeError("unsupported provider")
 
 
-async def _call_kernel(message: str, model_id: str, provider: str, provider_call):
+def _run_kernel_sync(message: str, model_id: str, provider: str, provider_call):
     import kl_kernel_logic
 
     psi = kl_kernel_logic.PsiDefinition(
@@ -100,14 +100,17 @@ async def _call_kernel(message: str, model_id: str, provider: str, provider_call
                 },
             }
 
-    trace = await asyncio.to_thread(
-        kernel.execute,
+    trace = kernel.execute(
         psi=psi,
         task=_task,
         metadata={"provider": provider, "model_id": model_id},
         message=message,
         model_id=model_id,
     )
+    return trace
+
+
+def _normalize_kernel_trace(trace, provider: str, model_id: str):
     trace_dict, trace_digest_value = normalize_trace(trace)
     if not trace.success:
         return (
@@ -137,6 +140,20 @@ async def _call_kernel(message: str, model_id: str, provider: str, provider_call
     if isinstance(output, dict) and "output" in output:
         return str(output.get("output") or ""), trace_dict, trace_digest_value, None
     return str(output or ""), trace_dict, trace_digest_value, None
+
+
+async def _call_kernel(message: str, model_id: str, provider: str, provider_call, *, offload: bool = True):
+    if offload:
+        trace = await asyncio.to_thread(
+            _run_kernel_sync,
+            message,
+            model_id,
+            provider,
+            provider_call,
+        )
+    else:
+        trace = _run_kernel_sync(message, model_id, provider, provider_call)
+    return _normalize_kernel_trace(trace, provider, model_id)
 
 
 def _extract_message(payload: Mapping[str, Any]) -> str | None:

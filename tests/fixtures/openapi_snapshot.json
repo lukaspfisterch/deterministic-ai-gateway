@@ -542,6 +542,57 @@
         },
         "summary": "Tail"
       }
+    },
+    "/threads/{thread_id}/timeline": {
+      "get": {
+        "operationId": "thread_timeline_threads__thread_id__timeline_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "thread_id",
+            "required": true,
+            "schema": {
+              "title": "Thread Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_payload",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Payload",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Thread Timeline Threads  Thread Id  Timeline Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Thread Timeline"
+      }
     }
   }
 }

@@ -26,6 +26,11 @@ class IntentEnvelope(TypedDict):
 
 
 class DecisionPayload(TypedDict, total=False):
+    policy: dict[str, Any]
+    context_digest: str
+    result: str
+    reasons: list[dict[str, Any]]
+    transforms: list[dict[str, Any]]
     decision: str
     reason_codes: list[str]
     requested_model_id: str
@@ -33,7 +38,6 @@ class DecisionPayload(TypedDict, total=False):
     provider: str
     policy_id: str
     policy_version: str
-    context_digest: str
     _obs: dict[str, Any]
 
 
@@ -53,6 +57,9 @@ class ExecutionPayload(TypedDict, total=False):
 class EventRecord(TypedDict):
     index: int
     kind: str
+    thread_id: str
+    turn_id: str
+    parent_turn_id: str | None
     lane: str
     actor: str
     intent_type: str

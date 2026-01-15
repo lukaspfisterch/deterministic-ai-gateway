@@ -7,7 +7,7 @@ from dbl_gateway.app import create_app
 
 
 def test_openapi_snapshot_matches_fixture() -> None:
-    app = create_app()
+    app = create_app(start_workers=False)
     openapi = app.openapi()
     rendered = json.dumps(openapi, sort_keys=True, indent=2)
     fixture_path = Path("tests/fixtures/openapi_snapshot.json")
