@@ -1,55 +1,114 @@
 # Deterministic AI Gateway
 
-The **Deterministic AI Gateway** is a secure execution boundary for LLM calls. It transforms AI usage into a deterministic, auditable event chain by enforcing explicit boundaries between intent, context, and decision.
+The **Deterministic AI Gateway** is a secure execution boundary for LLM calls.
 
-It is **not** an agent framework, a RAG pipeline, or a UI product. It is a governance layer.
+It turns AI usage into a deterministic, auditable event stream by enforcing strict separation between:
+- **Intent**
+- **Policy Decision**
+- **Execution**
+- **Observation**
 
-## Core Concepts
+It is **not** an agent framework, a RAG system, or a UI product. It is a governance and execution boundary.
 
-Every AI interaction follows a strict **Canonical Chain**:
+---
 
-1. **INTENT**: Explicit user/system request with identity anchors.
-2. **CONTEXT**: Deterministic assembly of data (produces a `context_digest`).
-3. **ADMISSION**: Boundary checks (deciding what may enter/leave).
-4. **EXECUTION**: Secure call to an LLM provider.
-5. **DECISION**: Normative record of the outcome + metadata (produces a `decision_digest`).
+## Repository Landscape
 
-### Identity Anchors
-To maintain causal ordering and enable branching, every intent must include:
-- `thread_id`: Stable identifier for a dialogue or workflow.
-- `turn_id`: Unique identifier for each specific call.
-- `parent_turn_id`: (Optional) The turn this call branches from.
+This project is part of a small, explicit toolchain:
+
+### 1. [deterministic-ai-gateway](https://github.com/lukaspfisterch/deterministic-ai-gateway) (this repository)
+**Role**: Authoritative execution boundary.
+
+**Responsibilities**:
+- Accepts intents.
+- Applies policy.
+- Executes LLM calls.
+- Emits canonical events (`INTENT`, `DECISION`, `EXECUTION`).
+- Persists an append-only event trail.
+- Exposes observation surfaces (`/snapshot`, `/tail`).
+
+*This is the only authoritative component.*
+
+### 2. [dbl-operator](https://github.com/lukaspfisterch/dbl-operator)
+**Role**: Observer + intervention client.
+
+**Responsibilities**:
+- Sends intents to the gateway.
+- Observes gateway state via snapshot and tail.
+- Renders timelines, audits, and decision views.
+- **Does not** evaluate policy or compute digests.
+- **Does not** store authoritative state.
+
+*Think of it as a cockpit, not a brain.*
+
+### 3. [dbl-chat-cli](https://github.com/lukaspfisterch/dbl-chat-cli)
+**Role**: Minimal interactive client.
+
+**Responsibilities**:
+- Sends chat intents.
+- Displays execution results.
+- Useful for smoke testing and demos.
+
+*Intentionally thin and non-authoritative.*
+
+---
+
+## Core Model
+
+Every AI interaction produces a canonical event chain:
+
+1. **INTENT**: Explicit request with identity anchors.
+2. **DECISION**: Policy evaluation result (normative).
+3. **EXECUTION**: Actual provider call and output.
+4. **OBSERVATION**: Read-only access via snapshot or tail.
+
+*No component may skip a step.*
+
+---
+
+## Identity Anchors
+
+Every intent must include:
+- **`thread_id`**: Stable identifier for a conversation or workflow.
+- **`turn_id`**: Unique identifier for this call.
+- **`parent_turn_id`** (optional): Enables branching and causal structure.
+
+*These anchors are supplied by the caller, not invented by the gateway.*
+
+---
 
 ## Design Stance
-- **Determinism First**: Same inputs -> same context -> same digests.
-- **Auditable**: All interactions are recorded as an append-only event stream.
-- **Explicit Boundaries**: No heuristics. Input/output rules are enforced by policy.
-- **Replayable**: Decision artifacts can be replayed offline for audit/verification.
+
+- **Deterministic**: Same inputs produce the same digests.
+- **Auditable**: All decisions are append-only and replayable.
+- **Explicit boundaries**: No heuristics, no hidden state.
+- **Observer-safe**: Clients may observe, never decide.
+
+---
 
 ## Installation
 
-Install the package in a virtual environment:
+Create a virtual environment and install the gateway in editable mode:
 
 ```bash
 pip install -e .
 ```
 
+---
+
 ## Running the Gateway
 
-The gateway requires model provider credentials (e.g., OpenAI) and a policy module configuration.
-
-### Configuration (Environment Variables)
+### Required Environment Variables
 
 | Variable | Description |
 | :--- | :--- |
-| `OPENAI_API_KEY` | Your OpenAI API key. |
-| `DBL_GATEWAY_POLICY_MODULE` | The python module containig the policy (e.g., `dbl_policy.allow_all`). |
-| `DBL_GATEWAY_POLICY_OBJECT` | The specific policy object within that module (usually `policy`). |
-| `DBL_GATEWAY_DB` | Path to the SQLite event trail (optional, defaults to `.\data\trail.sqlite`). |
+| `OPENAI_API_KEY` | Provider API key. |
+| `DBL_GATEWAY_POLICY_MODULE` | Policy module (e.g., `dbl_policy.allow_all`). |
+| `DBL_GATEWAY_POLICY_OBJECT` | Policy object inside the module (usually `policy`). |
 
-### Running the Server
+*The gateway will not start without a policy module.*
 
-#### Bash / Zsh
+### Start (Bash / Zsh)
 ```bash
 export OPENAI_API_KEY="sk-proj-..."
 export DBL_GATEWAY_POLICY_MODULE="dbl_policy.allow_all"
@@ -58,7 +117,7 @@ export DBL_GATEWAY_POLICY_OBJECT="policy"
 dbl-gateway serve --host 127.0.0.1 --port 8010
 ```
 
-#### PowerShell
+### Start (PowerShell)
 ```powershell
 $env:OPENAI_API_KEY = "sk-proj-..."
 $env:DBL_GATEWAY_POLICY_MODULE = "dbl_policy.allow_all"
@@ -67,18 +126,26 @@ $env:DBL_GATEWAY_POLICY_OBJECT = "policy"
 dbl-gateway serve --host 127.0.0.1 --port 8010
 ```
 
-## Tail (/tail) behavior
+> **Note**: Use `$env:VAR = "value"` for the current session. `setx` only applies to new terminals.
 
-The `/tail` endpoint is intended for **live observation**, not historical inspection.
+---
 
-- **Default behavior**: On connect, the gateway emits only the **last 20 events**, then continues streaming new events as they occur.
-- **Parameters**:
+## Observation Surfaces
+
+### Snapshot (`/snapshot`)
+- **Finite**: Returns a point-in-time state.
+- **Usage**: Used for audits and historical inspection.
+- **Target**: Suitable for tools and offline analysis.
+
+### Tail (`/tail`)
+The `/tail` endpoint is a **live stream**, not a log dump.
+
+- **Default behavior**: On connect, the gateway emits only the last 20 events, then continues live.
+- **Query parameters**:
   - `since`: Start streaming from a specific event index.
-  - `backlog`: Number of recent events to emit on connect (only used if `since` is omitted). Default is 20.
+  - `backlog`: Number of recent events to emit on connect (only applied if `since` is omitted, default = 20).
 
-### Examples
-
-#### Bash / Zsh
+#### Examples (Bash)
 ```bash
 # Live tail (default: last 20 events)
 curl -N http://127.0.0.1:8010/tail
@@ -90,28 +157,56 @@ curl -N "http://127.0.0.1:8010/tail?backlog=50"
 curl -N "http://127.0.0.1:8010/tail?since=1234"
 ```
 
-#### PowerShell
+#### Examples (PowerShell)
 ```powershell
-# Live tail (default: last 20 events)
+# Live tail (default)
 curl.exe -N "http://127.0.0.1:8010/tail"
 
-# Live tail with explicit backlog
+# Live tail with backlog
 curl.exe -N "http://127.0.0.1:8010/tail?backlog=50"
 
-# Resume from a known cursor
+# Resume from cursor
 curl.exe -N "http://127.0.0.1:8010/tail?since=1234"
 ```
 
-## Non-Goals
-- Agent orchestration or planning logic.
-- Long-term memory or semantic user modeling.
-- Vector database management.
-- UI/UX implementation.
+---
 
-## Status
-Early access. Focusing on core canon, invariants, and stabilization trails.
+## Integration Examples
+
+### Using the [Operator](https://github.com/lukaspfisterch/dbl-operator)
+```powershell
+$env:DBL_GATEWAY_BASE_URL = "http://127.0.0.1:8010"
+
+# Send an intent
+dbl-operator send-intent `
+  --thread-id t-1 `
+  --turn-id turn-1 `
+  --intent-type PING `
+  --correlation-id demo-1
+
+# View results
+dbl-operator thread-view --thread-id t-1
+dbl-operator audit-view  --thread-id t-1
+```
+
+### Using the [Chat CLI](https://github.com/lukaspfisterch/dbl-chat-cli)
+```powershell
+dbl-chat-cli --base-url http://127.0.0.1:8010 --principal-id user-1
+```
 
 ---
 
-## License
-TBD
+## Non-Goals
+- Agent planning or orchestration.
+- Memory systems or embeddings.
+- Vector databases.
+- UI frameworks.
+- "Smart" behavior.
+
+*This system optimizes for clarity, auditability, and control, not autonomy.*
+
+---
+
+## Status
+**Early but functional.**
+Core execution, policy gating, tailing, and auditing are operational. Current focus: surface stabilization and contract clarity.
