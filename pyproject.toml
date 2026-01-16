@@ -29,7 +29,7 @@ dev = [
   "pytest>=8,<9",
   "ruff>=0.5,<1",
   "mypy>=1.10,<2",
-  "dbl-reference>=0.2.0",
+  "dbl-reference>=0.1.1,<0.3.0",
 ]
 oidc = [
   "python-jose[cryptography]>=3.3,<4",
