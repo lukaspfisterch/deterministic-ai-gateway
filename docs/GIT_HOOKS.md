@@ -74,7 +74,7 @@ event = DblEvent(kind=DblEventKind.INTENT, ...)
 # ctx = PolicyContext(intent=..., trace=execution_trace)
 
 # ✅ Correct:
-ctx = PolicyContext(intent=intent_payload, boundary_version="0.3.0")
+ctx = PolicyContext(intent=intent_payload, boundary_version="0.3.1")
 ```
 
 ### Windows-Specific Usage

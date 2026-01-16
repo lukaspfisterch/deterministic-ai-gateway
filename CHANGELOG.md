@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.1
+- Added `dbl-chat-client` to repository landscape.
+- Enabled CORS for local development (port 5173).
+- Overhauled README for an infrastructure-focused tone and added project badges.
+- Added minimal Dockerfile for service deployment.
+
 ## v0.3.0
 - Identity anchors required on every INTENT (`thread_id`, `turn_id`, optional `parent_turn_id`).
 - Deterministic context and decision digests recorded on events.
