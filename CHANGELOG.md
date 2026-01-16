@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.2
+- Migrated reference dependency from `dbl-reference` to `ensdg`.
+- Updated documentation and CI workflows to reflect `ensdg` branding.
+- Bumped project version to synchronize dependencies.
+
 ## v0.3.1
 - Added `dbl-chat-client` to repository landscape.
 - Enabled CORS for local development (port 5173).

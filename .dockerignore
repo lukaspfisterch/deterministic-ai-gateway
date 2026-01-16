@@ -20,7 +20,7 @@ data
 .env.*
 LICENSE
 CHANGELOG.md
-README.md
+# README.md (required for pip install)
 Dockerfile
 .dockerignore
 inventory_*.md

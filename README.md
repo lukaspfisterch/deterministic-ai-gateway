@@ -4,18 +4,17 @@
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![License](https://img.shields.io/github/license/lukaspfisterch/deterministic-ai-gateway)
 
-This repository provides a **controlled execution boundary for LLM calls**.
+This repository provides a **deterministic execution boundary for LLM calls**.
 
-It separates *request*, *decision*, and *execution* into an explicit, inspectable flow and records every interaction as an append-only event stream.
-
-The goal is not autonomy or orchestration, but **traceability, control, and replayability**.
+It enforces an explicit separation between request, decision, and execution, and records every interaction as an append-only, replayable event stream.
 
 This is **not**:
 - an agent framework
-- a RAG system
+- a RAG pipeline
+- a workflow engine
 - a UI product
 
-It is infrastructure for running LLM calls in a way that remains observable and explainable over time.
+The gateway does not decide *what* to do. It decides *whether* an explicitly declared action may execute.
 
 ---
 
@@ -24,7 +23,7 @@ It is infrastructure for running LLM calls in a way that remains observable and 
 The gateway is part of a small toolchain:
 
 ### deterministic-ai-gateway (this repository)
-Authoritative execution boundary and event log.
+Authoritative execution boundary and event log. The gateway is authoritative for execution, but not for interpretation. It emits facts, not narratives.
 - Accepts explicit intents.
 - Applies policy.
 - Executes provider calls.
@@ -52,6 +51,8 @@ Every interaction follows the same sequence:
 3. **EXECUTION** – provider call and result.
 4. **OBSERVATION** – read-only access via snapshot or tail.
 
+Only DECISION events are normative. EXECUTION events are observational and cannot influence policy or state.
+
 No step is implicit; every event is linked via a stable `correlation_id`.
 
 ---
@@ -61,7 +62,7 @@ No step is implicit; every event is linked via a stable `correlation_id`.
 - **Explicit boundaries**: Strict separation between core logic, policy, and execution.
 - **Append-only records**: Immutable event trail for audit and replay.
 - **No hidden state**: No heuristics or internal memory beyond the event stream.
-- **Observer-safe**: Clients observe and project state; the gateway makes normative decisions.
+- **Observer-safe**: Clients may observe and project state, but cannot affect policy, execution, or event ordering.
 
 ---
 
@@ -74,7 +75,8 @@ pip install .
 ```
 
 ### Docker
-Run the gateway via Docker:
+The gateway can be started with a single Docker command. No interactive setup, no hidden defaults.
+
 ```bash
 docker build -t dbl-gateway .
 docker run -p 8010:8010 \
@@ -136,4 +138,4 @@ npm install && npm run dev
 ---
 
 ## Status
-**Early but functional.** Core execution, policy gating, and auditing are operational. Current focus: surface stabilization and contract clarity.
+**Early, but operational.** Core execution, policy gating, and auditing are stable. Current focus: surface stabilization and contract clarity.

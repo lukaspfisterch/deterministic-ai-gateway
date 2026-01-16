@@ -1,4 +1,4 @@
-# Validate a DBL system against dbl-reference
+# Validate a DBL system against ensdg
 
 Goal: validate invariants and replay equivalence of your event stream against the
 reference oracle.
@@ -10,7 +10,7 @@ Export your system event stream as JSONL:
 
 ## Validate invariants
 ```bash
-cat events.jsonl | dbl-reference --mode validate
+cat events.jsonl | ensdg --mode validate
 ```
 
 - Exit code 0: OK.
@@ -18,13 +18,13 @@ cat events.jsonl | dbl-reference --mode validate
 
 ## Replay projection
 ```bash
-cat events.jsonl | dbl-reference --mode replay
+cat events.jsonl | ensdg --mode replay
 ```
 
 ## Normative digest
 ```bash
-cat events.jsonl | dbl-reference --mode validate --digest
-cat events.jsonl | dbl-reference --mode replay --digest
+cat events.jsonl | ensdg --mode validate --digest
+cat events.jsonl | ensdg --mode replay --digest
 ```
 
 Compare digests across systems to assert normative equivalence.
@@ -44,9 +44,9 @@ param(
   [Parameter(Mandatory=$true)][string]$Path
 )
 
-Get-Content $Path | dbl-reference --mode validate
+Get-Content $Path | ensdg --mode validate
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Get-Content $Path | dbl-reference --mode validate --digest
+Get-Content $Path | ensdg --mode validate --digest
 ```
 

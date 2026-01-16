@@ -10,7 +10,7 @@ pip install -e D:\DEV\projects\dbl-ingress
 pip install -e D:\DEV\projects\dbl-policy
 pip install -e D:\DEV\projects\dbl-main
 pip install -e D:\DEV\projects\kl-kernel-logic-dev
-pip install -e D:\DEV\projects\dbl-reference
+pip install -e D:\DEV\projects\ensdg
 pip install -e .
 ```
 
