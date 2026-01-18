@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.1 — Context Injection Fix
+
+- **Execution Pipeline**: `model_messages` (assembled context with system block) are now correctly passed to the execution port.
+- **Ingress Logic**: Fixed a bug where `declared_refs` were lost during payload shaping (`_shape_payload` whitelist updated).
+- **Provider Interface**: OpenAI provider `execute()` method updated to accept `messages` list, enabling structured system context injection.
+
 ## v0.4.0 — Safe Context
 
 **Context System (DBL-compliant)**
