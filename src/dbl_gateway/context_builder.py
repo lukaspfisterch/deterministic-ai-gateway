@@ -169,8 +169,63 @@ def _extract_declared_refs(payload: Mapping[str, Any]) -> list[DeclaredRef]:
     return normalized
 
 
-def _build_model_messages(user_input: str) -> list[dict[str, str]]:
-    return [{"role": "user", "content": user_input}]
+def _build_model_messages(
+    user_input: str,
+    resolved_refs: list[ResolvedRef] | None = None,
+) -> list[dict[str, str]]:
+    """
+    Build model messages with optional context from resolved refs.
+    
+    If resolved_refs have content, prepend a system message with a
+    deterministic, read-only context block. This ensures:
+    - Refs declared become refs used (digest integrity)
+    - No assistant role spoofing (security)
+    - Clear audit trail (transparency)
+    """
+    messages: list[dict[str, str]] = []
+    
+    if resolved_refs:
+        refs_block = _render_refs_block(resolved_refs)
+        if refs_block:
+            messages.append({"role": "system", "content": refs_block})
+    
+    messages.append({"role": "user", "content": user_input})
+    return messages
+
+
+def _render_refs_block(resolved_refs: list[ResolvedRef]) -> str:
+    """
+    Render resolved refs as a deterministic system context block.
+    
+    Format is fixed and parseable:
+    - Clear delimiters (DBL_CONTEXT_REFS_BEGIN/END)
+    - Per-ref metadata (ref_id, kind)
+    - Content separated by ---
+    
+    This block is read-only context, never interpreted as assistant history.
+    """
+    parts: list[str] = []
+    parts.append("DBL_CONTEXT_REFS_BEGIN")
+    parts.append("The following is referenced context from previous events in this conversation.")
+    parts.append("")
+    
+    has_content = False
+    for ref in resolved_refs:
+        content = (ref.get("content") or "").strip()
+        if not content:
+            continue
+        has_content = True
+        ref_id = ref.get("ref_id", "")
+        kind = ref.get("event_kind", "")
+        parts.append(f"[ref_id={ref_id} kind={kind}]")
+        parts.append(content)
+        parts.append("---")
+    
+    if not has_content:
+        return ""
+    
+    parts.append("DBL_CONTEXT_REFS_END")
+    return "\n".join(parts)
 
 
 def _boundary_transforms(
@@ -306,7 +361,7 @@ def build_context_with_refs(
         },
     }
 
-    raw_model_messages = _build_model_messages(user_input)
+    raw_model_messages = _build_model_messages(user_input, resolved_refs=resolved_refs or None)
     admitted_model_messages, boundary_meta = admit_model_messages(raw_model_messages)
     transforms = _boundary_transforms(raw_model_messages, admitted_model_messages, boundary_meta)
     

@@ -66,7 +66,9 @@ class ResolvedRef(TypedDict, total=False):
     version: str | None
     event_index: int           # Position in stream (for ordering)
     event_digest: str          # Digest of referenced event (for replay verification)
+    event_kind: str            # Kind of resolved event (INTENT, EXECUTION, etc.)
     admitted_for: str          # "governance" | "execution_only"
+    content: str               # Extracted content from event (for prompt building)
 
 
 class NormalizationRecord(TypedDict, total=False):

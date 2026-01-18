@@ -81,6 +81,49 @@ class ResolutionResult:
     normative_input_digests: tuple[str, ...]
 
 
+def _extract_event_content(event: EventRecord) -> str:
+    """
+    Extract text content from an event for context building.
+    
+    - INTENT: payload.message or payload.payload.message
+    - EXECUTION: payload.output_text or payload.result
+    - Other: empty string
+    """
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return ""
+    
+    kind = event.get("kind", "")
+    
+    if kind == "INTENT":
+        # Try payload.message first, then nested payload.payload.message
+        message = payload.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+        inner_payload = payload.get("payload")
+        if isinstance(inner_payload, dict):
+            inner_message = inner_payload.get("message")
+            if isinstance(inner_message, str) and inner_message.strip():
+                return inner_message.strip()
+        return ""
+    
+    if kind == "EXECUTION":
+        # Try output_text first, then result
+        output_text = payload.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            return output_text.strip()
+        result = payload.get("result")
+        if isinstance(result, str) and result.strip():
+            return result.strip()
+        if isinstance(result, dict):
+            text = result.get("text")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+        return ""
+    
+    return ""
+
+
 def resolve_declared_refs(
     declared_refs: Sequence[DeclaredRef],
     thread_id: str,
@@ -168,7 +211,9 @@ def resolve_declared_refs(
             "ref_id": ref_id,
             "event_index": event.get("index", 0),
             "event_digest": event.get("digest", ""),
+            "event_kind": event_kind,
             "admitted_for": admitted_for,
+            "content": _extract_event_content(event),
         }
         
         if ref.get("version"):
