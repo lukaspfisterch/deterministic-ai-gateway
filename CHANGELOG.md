@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.4.0 — Safe Context
+
+**Context System (DBL-compliant)**
+
+- **declared_refs**: Clients can now explicitly declare event references as context via `IntentEnvelope.payload.declared_refs`.
+- **Ref resolution**: Gateway validates and resolves refs against thread events with scope-bound, existence, and limit checks.
+- **I_context / O_context split**: INTENT events are admitted for governance (`admitted_for: "governance"`), EXECUTION events are `execution_only` and excluded from policy input.
+- **Normalization materialized**: Every boundary transformation is recorded in `context_spec.retrieval.normalization`.
+- **Config as code**: Context behavior controlled by `config/context.json` with computed `config_digest`.
+- **DECISION boundary block**: Every DECISION event now includes `boundary.context_config_digest` for replay verification.
+
+**Wire Contract**
+
+- Added `declared_refs` field to `IntentEnvelope.payload` (optional, list of `DeclaredRef`).
+- New typed errors: `REF_NOT_FOUND`, `CROSS_THREAD_REF`, `MAX_REFS_EXCEEDED`.
+- DECISION payload includes `boundary` block with `context_config_digest` and `boundary_version`.
+
+**Invariants Guaranteed**
+
+- Observation excluded from dom(G) (Claim 4)
+- Canonical ordering (event_index ascending)
+- Scope-bound refs (same thread_id)
+- Replay recompute equality
+
+**Explicit Non-Goals**
+
+- No auto-expansion of thread history
+- No LLM-based summarization
+- No config hot reload
+
 ## v0.3.2
 - Migrated reference dependency from `dbl-reference` to `ensdg`.
 - Updated documentation and CI workflows to reflect `ensdg` branding.

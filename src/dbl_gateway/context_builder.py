@@ -4,12 +4,26 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 from .boundary import admit_model_messages
-from dbl_gateway.contracts import AssembledContext, ContextSpec, DeclaredRef, context_digest
+from .config import get_context_config, ContextConfig
+from .models import EventRecord
+from .ref_resolver import (
+    resolve_declared_refs,
+    ResolutionResult,
+    RefResolutionError,
+)
+from dbl_gateway.contracts import (
+    AssembledContext,
+    ContextSpec,
+    DeclaredRef,
+    NormalizationRecord,
+    ResolvedRef,
+    context_digest,
+)
 
-__all__ = ["ContextArtifacts", "build_context"]
+__all__ = ["ContextArtifacts", "build_context", "build_context_with_refs", "RefResolutionError"]
 
-DEFAULT_SCHEMA_VERSION = "ctxspec.1"
-DEFAULT_ORDERING = "CANONICAL_V1"
+# Version of ContextSpec schema (separate from config schema)
+CONTEXT_SPEC_SCHEMA_VERSION = "ctxspec.2"
 
 
 @dataclass(frozen=True)
@@ -17,19 +31,55 @@ class ContextArtifacts:
     context_spec: ContextSpec
     assembled_context: AssembledContext
     context_digest: str
+    config_digest: str  # NEW: Config digest for DECISION materialization
     boundary_meta: Mapping[str, Any] | None = None
     transforms: list[dict[str, Any]] = field(default_factory=list)
 
 
-def build_context(payload: Mapping[str, Any] | None, *, intent_type: str) -> ContextArtifacts:
-    """Deterministic assembly of ContextSpec, AssembledContext, and digest."""
+def build_context(
+    payload: Mapping[str, Any] | None,
+    *,
+    intent_type: str,
+    config: ContextConfig | None = None,
+) -> ContextArtifacts:
+    """
+    Deterministic assembly of ContextSpec, AssembledContext, and digest.
+    
+    Config-driven normalization:
+    - Loads config from get_context_config() if not provided
+    - Applies normalization rules from config
+    - Materializes NormalizationRecord for replay verification
+    
+    Args:
+        payload: Intent payload with message, thread_id, turn_id, declared_refs
+        intent_type: The intent type (e.g., "chat.message")
+        config: Optional config override for testing
+        
+    Returns:
+        ContextArtifacts with context_spec, assembled_context, digests
+    """
     if not isinstance(intent_type, str) or not intent_type.strip():
         raise ValueError("intent_type is required to build context")
+    
+    # Load config (cached)
+    cfg = config or get_context_config()
+    
     payload_obj: Mapping[str, Any] = payload if isinstance(payload, Mapping) else {}
 
     user_input = _extract_user_input(payload_obj)
     identity = _extract_identity(payload_obj)
     declared_refs = _extract_declared_refs(payload_obj)
+    
+    # Build normalization record (materializes what boundary did)
+    normalization: NormalizationRecord = {
+        "applied_rules": list(cfg.normalization_rules),
+        "boundary_version": cfg.schema_version,
+        "config_digest": cfg.config_digest,
+    }
+    
+    # Resolved refs: empty for now (Step 2 will populate from declared_refs)
+    # When declared_refs are resolved against store, they become ResolvedRef
+    resolved_refs: list[ResolvedRef] = []
 
     context_spec: ContextSpec = {
         "identity": identity,
@@ -37,25 +87,34 @@ def build_context(payload: Mapping[str, Any] | None, *, intent_type: str) -> Con
             "intent_type": intent_type.strip(),
             "user_input": user_input,
         },
-        "retrieval": {"declared_refs": declared_refs},
+        "retrieval": {
+            "declared_refs": declared_refs,
+            "resolved_refs": resolved_refs,
+            "normalization": normalization,
+        },
         "assembly_rules": {
-            "schema_version": DEFAULT_SCHEMA_VERSION,
-            "ordering": DEFAULT_ORDERING,
+            "schema_version": CONTEXT_SPEC_SCHEMA_VERSION,
+            "ordering": cfg.canonical_sort,
         },
     }
 
     raw_model_messages = _build_model_messages(user_input)
     admitted_model_messages, boundary_meta = admit_model_messages(raw_model_messages)
     transforms = _boundary_transforms(raw_model_messages, admitted_model_messages, boundary_meta)
+    
     assembled_context: AssembledContext = {
         "model_messages": admitted_model_messages,
-        "assembled_from": declared_refs,
+        "assembled_from": resolved_refs,  # Will match resolved_refs when populated
+        "normative_input_digests": [],    # Will contain INTENT payload digests
     }
+    
     context_digest_value = context_digest(context_spec, assembled_context)
+    
     return ContextArtifacts(
         context_spec=context_spec,
         assembled_context=assembled_context,
         context_digest=context_digest_value,
+        config_digest=cfg.config_digest,
         boundary_meta=boundary_meta,
         transforms=transforms,
     )
@@ -160,3 +219,110 @@ def _normalized_message(value: Mapping[str, Any]) -> Mapping[str, str]:
         "role": role.strip() if isinstance(role, str) else "",
         "content": content.strip() if isinstance(content, str) else "",
     }
+
+
+def build_context_with_refs(
+    payload: Mapping[str, Any] | None,
+    *,
+    intent_type: str,
+    thread_events: Sequence[EventRecord],
+    config: ContextConfig | None = None,
+) -> ContextArtifacts:
+    """
+    Build context with declared_refs resolution.
+    
+    This is the main entry point for context building when refs need to be
+    resolved against the event store.
+    
+    Resolution flow:
+    1. Extract declared_refs from payload
+    2. Resolve each ref against thread_events
+    3. Classify refs (governance vs execution_only)
+    4. Build ContextSpec with resolved_refs materialized
+    5. Compute context_digest over the full context
+    
+    Args:
+        payload: Intent payload with message, thread_id, turn_id, declared_refs
+        intent_type: The intent type (e.g., "chat.message")
+        thread_events: Events in the current thread (from store.timeline)
+        config: Optional config override for testing
+        
+    Returns:
+        ContextArtifacts with fully resolved refs and digests
+        
+    Raises:
+        RefResolutionError: If ref validation fails (not found, cross-thread, etc.)
+        ValueError: If payload is invalid
+    """
+    if not isinstance(intent_type, str) or not intent_type.strip():
+        raise ValueError("intent_type is required to build context")
+    
+    # Load config (cached)
+    cfg = config or get_context_config()
+    
+    payload_obj: Mapping[str, Any] = payload if isinstance(payload, Mapping) else {}
+
+    user_input = _extract_user_input(payload_obj)
+    identity = _extract_identity(payload_obj)
+    declared_refs = _extract_declared_refs(payload_obj)
+    thread_id = identity["thread_id"]
+    
+    # Resolve declared_refs against thread events
+    resolution: ResolutionResult | None = None
+    resolved_refs: list[ResolvedRef] = []
+    normative_input_digests: list[str] = []
+    
+    if declared_refs:
+        resolution = resolve_declared_refs(
+            declared_refs=declared_refs,
+            thread_id=thread_id,
+            thread_events=list(thread_events),
+            config=cfg,
+        )
+        resolved_refs = list(resolution.resolved_refs)
+        normative_input_digests = list(resolution.normative_input_digests)
+    
+    # Build normalization record (materializes what boundary did)
+    normalization: NormalizationRecord = {
+        "applied_rules": list(cfg.normalization_rules),
+        "boundary_version": cfg.schema_version,
+        "config_digest": cfg.config_digest,
+    }
+
+    context_spec: ContextSpec = {
+        "identity": identity,
+        "intent": {
+            "intent_type": intent_type.strip(),
+            "user_input": user_input,
+        },
+        "retrieval": {
+            "declared_refs": declared_refs,
+            "resolved_refs": resolved_refs,
+            "normalization": normalization,
+        },
+        "assembly_rules": {
+            "schema_version": CONTEXT_SPEC_SCHEMA_VERSION,
+            "ordering": cfg.canonical_sort,
+        },
+    }
+
+    raw_model_messages = _build_model_messages(user_input)
+    admitted_model_messages, boundary_meta = admit_model_messages(raw_model_messages)
+    transforms = _boundary_transforms(raw_model_messages, admitted_model_messages, boundary_meta)
+    
+    assembled_context: AssembledContext = {
+        "model_messages": admitted_model_messages,
+        "assembled_from": resolved_refs,
+        "normative_input_digests": normative_input_digests,
+    }
+    
+    context_digest_value = context_digest(context_spec, assembled_context)
+    
+    return ContextArtifacts(
+        context_spec=context_spec,
+        assembled_context=assembled_context,
+        context_digest=context_digest_value,
+        config_digest=cfg.config_digest,
+        boundary_meta=boundary_meta,
+        transforms=transforms,
+    )

@@ -1,0 +1,100 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "DBL Gateway Context Configuration",
+    "description": "Configuration for context normalization and admission rules (Boundary L).",
+    "type": "object",
+    "required": [
+        "schema_version",
+        "context"
+    ],
+    "properties": {
+        "schema_version": {
+            "type": "string",
+            "description": "Schema version for evolution tracking.",
+            "enum": [
+                "1"
+            ]
+        },
+        "context": {
+            "type": "object",
+            "required": [
+                "max_refs",
+                "empty_refs_policy",
+                "enforce_scope_bound"
+            ],
+            "properties": {
+                "max_refs": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "description": "Maximum number of declared_refs allowed per request."
+                },
+                "empty_refs_policy": {
+                    "type": "string",
+                    "enum": [
+                        "DENY",
+                        "EXPAND_LAST_N",
+                        "ALLOW_EMPTY"
+                    ],
+                    "description": "Policy when declared_refs is empty. DENY = reject, EXPAND_LAST_N = auto-expand, ALLOW_EMPTY = accept empty context."
+                },
+                "expand_last_n": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "description": "Number of recent INTENTs to expand when empty_refs_policy=EXPAND_LAST_N."
+                },
+                "allow_execution_refs_for_prompt": {
+                    "type": "boolean",
+                    "description": "If true, EXECUTION refs in declared_refs are allowed for prompt construction (O_context), but excluded from I_context and digest."
+                },
+                "canonical_sort": {
+                    "type": "string",
+                    "enum": [
+                        "event_index_asc",
+                        "event_index_desc",
+                        "none"
+                    ],
+                    "description": "Canonical ordering for resolved refs. 'none' preserves client order (NOT RECOMMENDED)."
+                },
+                "enforce_scope_bound": {
+                    "type": "boolean",
+                    "description": "If true, all refs must belong to the same thread_id as the current request."
+                }
+            }
+        },
+        "normalization": {
+            "type": "object",
+            "properties": {
+                "rules": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "FILTER_INTENT_ONLY",
+                            "SCOPE_BOUND",
+                            "SORT_CANONICAL",
+                            "DEDUPE_REFS"
+                        ]
+                    },
+                    "description": "Always-applied normalization rules."
+                },
+                "conditional_rules": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "trigger": {
+                                "type": "string",
+                                "description": "Condition that activates this rule."
+                            },
+                            "enabled": {
+                                "type": "boolean"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

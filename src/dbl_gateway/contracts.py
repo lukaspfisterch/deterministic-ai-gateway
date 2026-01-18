@@ -59,8 +59,28 @@ class DeclaredRef(TypedDict, total=False):
     version: str | None
 
 
-class RetrievalSpec(TypedDict):
-    declared_refs: list[DeclaredRef]
+class ResolvedRef(TypedDict, total=False):
+    """A resolved reference with validation metadata."""
+    ref_type: str
+    ref_id: str
+    version: str | None
+    event_index: int           # Position in stream (for ordering)
+    event_digest: str          # Digest of referenced event (for replay verification)
+    admitted_for: str          # "governance" | "execution_only"
+
+
+class NormalizationRecord(TypedDict, total=False):
+    """Record of boundary normalization applied to context request."""
+    applied_rules: list[str]           # Rules that were applied
+    boundary_version: str              # Gateway boundary version
+    config_digest: str                 # Digest of context config (for replay)
+    expansion_reason: str | None       # Why expansion occurred (if any)
+
+
+class RetrievalSpec(TypedDict, total=False):
+    declared_refs: list[DeclaredRef]           # What client requested
+    resolved_refs: list[ResolvedRef]           # What boundary resolved (NEW)
+    normalization: NormalizationRecord         # What boundary did (NEW)
 
 
 class AssemblyRules(TypedDict, total=False):
@@ -78,7 +98,8 @@ class ContextSpec(TypedDict):
 
 class AssembledContext(TypedDict, total=False):
     model_messages: list[dict[str, Any]]
-    assembled_from: list[DeclaredRef]
+    assembled_from: list[ResolvedRef]          # Changed from DeclaredRef to ResolvedRef
+    normative_input_digests: list[str]         # Digests of INTENT payloads used (NEW)
     warnings: list[str]
 
 
@@ -237,6 +258,64 @@ def _normalize_declared_refs(refs: list[Mapping[str, Any]]) -> list[DeclaredRef]
     return normalized
 
 
+def _normalize_resolved_refs(refs: list[Mapping[str, Any]]) -> list[ResolvedRef]:
+    """Normalize resolved refs with additional metadata fields."""
+    normalized: list[ResolvedRef] = []
+    for item in refs:
+        if not isinstance(item, Mapping):
+            continue
+        ref_type = item.get("ref_type")
+        ref_id = item.get("ref_id")
+        if not isinstance(ref_type, str) or not isinstance(ref_id, str):
+            continue
+        norm: ResolvedRef = {
+            "ref_type": ref_type.strip(),
+            "ref_id": ref_id.strip(),
+        }
+        if item.get("version") is not None:
+            norm["version"] = str(item["version"])
+        if isinstance(item.get("event_index"), int):
+            norm["event_index"] = item["event_index"]
+        if isinstance(item.get("event_digest"), str):
+            norm["event_digest"] = item["event_digest"].strip()
+        if isinstance(item.get("admitted_for"), str):
+            norm["admitted_for"] = item["admitted_for"].strip()
+        normalized.append(norm)
+    # Sort by event_index if present, otherwise by ref_id
+    normalized.sort(key=lambda r: (r.get("event_index", 0), r["ref_type"], r["ref_id"]))
+    return normalized
+
+
+def _normalize_normalization_record(record: Mapping[str, Any] | None) -> NormalizationRecord:
+    """Normalize the normalization record for canonical digest."""
+    if not isinstance(record, Mapping):
+        return {"applied_rules": [], "boundary_version": "unknown", "config_digest": "unknown"}
+    
+    applied_rules = record.get("applied_rules") or []
+    if not isinstance(applied_rules, list):
+        applied_rules = []
+    
+    boundary_version = record.get("boundary_version")
+    if not isinstance(boundary_version, str):
+        boundary_version = "unknown"
+    
+    config_digest = record.get("config_digest")
+    if not isinstance(config_digest, str):
+        config_digest = "unknown"
+    
+    normalized: NormalizationRecord = {
+        "applied_rules": sorted([str(r).strip() for r in applied_rules]),
+        "boundary_version": boundary_version.strip(),
+        "config_digest": config_digest.strip(),
+    }
+    
+    expansion_reason = record.get("expansion_reason")
+    if isinstance(expansion_reason, str) and expansion_reason.strip():
+        normalized["expansion_reason"] = expansion_reason.strip()
+    
+    return normalized
+
+
 def _normalize_context_spec(spec: Mapping[str, Any]) -> ContextSpec:
     identity = spec.get("identity")
     intent = spec.get("intent")
@@ -287,7 +366,11 @@ def _normalize_context_spec(spec: Mapping[str, Any]) -> ContextSpec:
             "intent_type": intent_type.strip(),
             "user_input": user_input,
         },
-        "retrieval": {"declared_refs": declared_refs},
+        "retrieval": {
+            "declared_refs": declared_refs,
+            "resolved_refs": _normalize_resolved_refs(retrieval.get("resolved_refs") or []),
+            "normalization": _normalize_normalization_record(retrieval.get("normalization")),
+        },
         "assembly_rules": {
             "schema_version": schema_version.strip(),
             "ordering": ordering.strip(),
@@ -311,10 +394,16 @@ def _normalize_assembled_context(assembled: Mapping[str, Any]) -> AssembledConte
         raise ValueError("assembled_context.model_messages must be a list")
     if not isinstance(assembled_from, list):
         raise ValueError("assembled_context.assembled_from must be a list")
-    normalized_from = _normalize_declared_refs(assembled_from)
+    normalized_from = _normalize_resolved_refs(assembled_from)
+    
+    normative_input_digests = assembled.get("normative_input_digests") or []
+    if not isinstance(normative_input_digests, list):
+        normative_input_digests = []
+    
     normalized: AssembledContext = {
         "model_messages": list(model_messages),
         "assembled_from": normalized_from,
+        "normative_input_digests": sorted([str(d).strip() for d in normative_input_digests]),
     }
     if warnings is not None:
         if not isinstance(warnings, list):

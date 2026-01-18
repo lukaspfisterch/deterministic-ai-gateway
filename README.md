@@ -67,6 +67,51 @@ No step is implicit; every event is linked via a stable `correlation_id`.
 
 ---
 
+## Context System (v0.4.0+)
+
+The gateway supports explicit context declaration for multi-turn conversations.
+
+### declared_refs
+
+Clients can reference prior events as context via `IntentEnvelope.payload.declared_refs`:
+
+```json
+{
+  "declared_refs": [
+    {"ref_type": "event", "ref_id": "correlation-id-1"},
+    {"ref_type": "event", "ref_id": "turn-id-2"}
+  ]
+}
+```
+
+### I_context / O_context Split
+
+| Type | Admitted For | Digest Scope | Policy Access |
+|------|--------------|--------------|---------------|
+| INTENT events | `governance` | ✅ Included | ✅ Yes |
+| EXECUTION events | `execution_only` | ✅ Included (audit) | ❌ No |
+
+This ensures **observations never influence governance decisions** (DBL Claim 4).
+
+### Configuration
+
+Context behavior is controlled by `config/context.json`:
+
+```json
+{
+  "max_refs": 50,
+  "empty_refs_policy": "DENY",
+  "canonical_sort": "event_index_asc",
+  "enforce_scope_bound": true
+}
+```
+
+The config digest is pinned in every DECISION event for replay verification.
+
+See [docs/CONTEXT.md](docs/CONTEXT.md) for the full specification.
+
+---
+
 ## Installation
 
 ### Local Install

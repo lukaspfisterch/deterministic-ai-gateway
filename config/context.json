@@ -1,0 +1,25 @@
+{
+  "$schema": "./context.schema.json",
+  "schema_version": "1",
+  "context": {
+    "max_refs": 50,
+    "empty_refs_policy": "DENY",
+    "expand_last_n": 10,
+    "allow_execution_refs_for_prompt": true,
+    "canonical_sort": "event_index_asc",
+    "enforce_scope_bound": true
+  },
+  "normalization": {
+    "rules": [
+      "FILTER_INTENT_ONLY",
+      "SCOPE_BOUND",
+      "SORT_CANONICAL"
+    ],
+    "conditional_rules": {
+      "EXPAND_THREAD_HISTORY": {
+        "trigger": "empty_refs_and_hint",
+        "enabled": false
+      }
+    }
+  }
+}

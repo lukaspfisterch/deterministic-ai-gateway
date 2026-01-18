@@ -6,7 +6,7 @@ from typing import Any, Mapping, TypedDict
 INTERFACE_VERSION = 2
 
 
-class IntentPayload(TypedDict):
+class IntentPayload(TypedDict, total=False):
     stream_id: str
     lane: str
     actor: str
@@ -17,6 +17,7 @@ class IntentPayload(TypedDict):
     payload: dict[str, Any]
     requested_model_id: str | None
     inputs: dict[str, Any] | None
+    declared_refs: list[dict[str, Any]] | None  # NEW: Context refs
 
 
 class IntentEnvelope(TypedDict):
@@ -134,6 +135,7 @@ def parse_intent_envelope(body: Mapping[str, Any]) -> IntentEnvelope:
         raise ValueError("payload.inputs must be an object")
     if requested_model_id is not None and not isinstance(requested_model_id, str):
         raise ValueError("payload.requested_model_id must be a string")
+    declared_refs = _parse_declared_refs(payload.get("declared_refs"))
     return {
         "interface_version": interface_version,
         "correlation_id": correlation_id.strip(),
@@ -148,5 +150,34 @@ def parse_intent_envelope(body: Mapping[str, Any]) -> IntentEnvelope:
             "payload": dict(inner_payload),
             "requested_model_id": requested_model_id.strip() if isinstance(requested_model_id, str) else None,
             "inputs": dict(inputs) if isinstance(inputs, Mapping) else None,
+            "declared_refs": declared_refs,
         },
     }
+
+
+def _parse_declared_refs(raw: Any) -> list[dict[str, Any]] | None:
+    """Parse and validate declared_refs from payload."""
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ValueError("payload.declared_refs must be a list")
+    
+    parsed: list[dict[str, Any]] = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"declared_refs[{i}] must be an object")
+        ref_type = item.get("ref_type")
+        ref_id = item.get("ref_id")
+        if not isinstance(ref_type, str) or not ref_type.strip():
+            raise ValueError(f"declared_refs[{i}].ref_type must be a non-empty string")
+        if not isinstance(ref_id, str) or not ref_id.strip():
+            raise ValueError(f"declared_refs[{i}].ref_id must be a non-empty string")
+        ref: dict[str, Any] = {
+            "ref_type": ref_type.strip(),
+            "ref_id": ref_id.strip(),
+        }
+        version = item.get("version")
+        if version is not None:
+            ref["version"] = str(version)
+        parsed.append(ref)
+    return parsed

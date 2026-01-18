@@ -20,6 +20,7 @@ from .capabilities import CapabilitiesResponse, get_capabilities, resolve_model,
 from .adapters.execution_adapter_kl import KlExecutionAdapter
 from .adapters.policy_adapter_dbl_policy import DblPolicyAdapter, _load_policy
 from .context_builder import build_context
+from .config import get_context_config
 from .decision_builder import build_normative_decision
 from .ports.execution_port import ExecutionResult
 from .ports.policy_port import DecisionResult
@@ -404,6 +405,7 @@ async def _process_intent(
     thread_id, turn_id, parent_turn_id = _anchors_for_event(intent_event)
     decision_emitted = False
     context_digest: str | None = None
+    context_config_digest: str | None = None  # NEW: Config digest for DECISION
     boundary_context: dict[str, Any] | None = None
     context_transforms: list[dict[str, Any]] = []
     context_spec: Mapping[str, Any] | None = None
@@ -415,6 +417,7 @@ async def _process_intent(
             intent_type=str(authoritative.get("intent_type") or ""),
         )
         context_digest = context_artifacts.context_digest
+        context_config_digest = context_artifacts.config_digest  # NEW: Extract config digest
         context_transforms = list(context_artifacts.transforms)
         context_spec = context_artifacts.context_spec
         assembled_context = context_artifacts.assembled_context
@@ -443,6 +446,7 @@ async def _process_intent(
                     DecisionResult(decision="DENY", reason_codes=["evaluation_error"]),
                     trace_id,
                     context_digest=context_digest,
+                    context_config_digest=context_config_digest,
                     boundary=boundary_context,
                     requested_model_id=None,
                     resolved_model_id=None,
@@ -491,6 +495,7 @@ async def _process_intent(
                 resolved_model_id=resolved_model or None,
                 provider=provider,
                 context_digest=context_digest,
+                context_config_digest=context_config_digest,
                 boundary=boundary_context,
                 resolution_reason=resolution_reason,
                 transforms=context_transforms,
@@ -571,6 +576,7 @@ async def _process_intent(
                 DecisionResult(decision="DENY", reason_codes=["evaluation_error"]),
                 trace_id,
                 context_digest=context_digest,
+                context_config_digest=context_config_digest,
                 boundary=boundary_context,
                 requested_model_id=None,
                 resolved_model_id=None,
@@ -591,6 +597,7 @@ def _decision_payload(
     provider: str | None,
     resolution_reason: str | None = None,
     context_digest: str | None = None,
+    context_config_digest: str | None = None,  # NEW: Config digest for replay
     boundary: Mapping[str, Any] | None = None,
     transforms: Sequence[Mapping[str, Any]] | None = None,
     context_spec: Mapping[str, Any] | None = None,
@@ -612,6 +619,12 @@ def _decision_payload(
         payload["context_spec"] = context_spec
     if assembled_context is not None:
         payload["assembled_context"] = assembled_context
+    # NEW: Boundary block with config_digest for replay verification
+    if context_config_digest:
+        payload["boundary"] = {
+            "context_config_digest": context_config_digest,
+            "boundary_version": "1",
+        }
     if requested_model_id:
         payload.setdefault("_obs", {})  # keep out of normative digest
         payload["_obs"]["requested_model_id"] = requested_model_id
