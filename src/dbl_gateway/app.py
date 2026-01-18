@@ -140,6 +140,9 @@ def create_app(*, start_workers: bool = True) -> FastAPI:
         outer_inputs = intent_payload.get("inputs")
         if isinstance(outer_inputs, Mapping):
             payload_for_shape["inputs"] = dict(outer_inputs)
+        # Transfer declared_refs from intent_payload to shaped payload
+        if intent_payload.get("declared_refs"):
+            payload_for_shape["declared_refs"] = intent_payload["declared_refs"]
         shaped_payload = _shape_payload(intent_payload["intent_type"], payload_for_shape)
         try:
             admission_record = admit_and_shape_intent(
@@ -876,6 +879,10 @@ def _shape_payload(intent_type: str, payload: Mapping[str, Any]) -> dict[str, An
         inputs = payload.get("inputs")
         if isinstance(inputs, Mapping):
             shaped["inputs"] = dict(inputs)
+        # Include declared_refs for context building
+        declared_refs = payload.get("declared_refs")
+        if isinstance(declared_refs, list) and declared_refs:
+            shaped["declared_refs"] = declared_refs
         return shaped
     return dict(payload)
 
