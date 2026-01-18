@@ -153,7 +153,7 @@ docker run --rm -p 8010:8010 \
   -e OPENAI_API_KEY="sk-..." \
   -e DBL_GATEWAY_POLICY_MODULE="dbl_policy.allow_all" \
   -e DBL_GATEWAY_POLICY_OBJECT="policy" \
-  lukaspfister/dbl-gateway:0.4.2
+  lukaspfister/dbl-gateway:0.4.3
 ```
 
 ---

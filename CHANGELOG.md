@@ -2,6 +2,9 @@
 
 
 
+## v0.4.3 — Docker Config Fix
+- **Docker Fix**: Set `DBL_GATEWAY_CONTEXT_CONFIG` environment variable in Dockerfile to resolve config path issue in containerized deployments.
+
 ## v0.4.2 — Observer Mode & UX
 - **Observer Mode**: Gateway starts gracefully without policy/providers, logging instructions instead of crashing.
 - **Improved UX**: Refined README with clearer Docker and environment variable sections.
