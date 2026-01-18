@@ -84,6 +84,8 @@ Clients can reference prior events as context via `IntentEnvelope.payload.declar
 }
 ```
 
+These references are resolved by the gateway and **injected into the LLM context** as a deterministic system block. This allows for multi-turn conversations without the gateway implicitly managing history.
+
 ### I_context / O_context Split
 
 | Type | Admitted For | Digest Scope | Policy Access |

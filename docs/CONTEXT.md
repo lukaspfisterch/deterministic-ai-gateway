@@ -66,6 +66,18 @@ Request INTENT-6 with declared_refs: [INTENT-1..5]
 → Policy returns DENY
 ```
 
+
+
+## Use in Execution
+
+While **policy** only sees I_context (INTENTs), the **execution** (LLM prompt) receives the full resolved context (I_context + O_context).
+
+1. **Assembly**: The gateway constructs a deterministic system message block from `resolved_refs`.
+2. **Injection**: This block is prepended to the user's message.
+3. **Execution**: The provider receives `[system_context, user_message]`.
+
+This ensures the LLM has conversational memory (O_context) while the policy remains purely normative (I_context).
+
 ## Digest Scope
 
 ### Included in `context_digest`
