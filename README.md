@@ -147,10 +147,12 @@ This allows inspecting capabilities, snapshots, and event streams.
 
 To enable execution, provide a policy and at least one provider:
 
+**Execution-enabled (dev policy, evaluation only):**
 ```bash
-docker run -p 8010:8010 \
-  -e DBL_GATEWAY_POLICY_MODULE="dbl_policy.allow_all" \
+docker run --rm -p 8010:8010 \
   -e OPENAI_API_KEY="sk-..." \
+  -e DBL_GATEWAY_POLICY_MODULE="dbl_policy.allow_all" \
+  -e DBL_GATEWAY_POLICY_OBJECT="policy" \
   lukaspfister/dbl-gateway:0.4.2
 ```
 
