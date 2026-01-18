@@ -5,17 +5,28 @@
 ![License](https://img.shields.io/github/license/lukaspfisterch/dbl-gateway)
 [![PyPI version](https://img.shields.io/pypi/v/dbl-gateway.svg)](https://pypi.org/project/dbl-gateway/)
 
-This repository provides a **deterministic execution boundary for LLM calls**.
 
-It enforces an explicit separation between request, decision, and execution, and records every interaction as an append-only, replayable event stream.
+DBL Gateway is a deterministic execution boundary for LLM calls.
+
+It enforces explicit intent, policy decisions, and execution as an auditable, replayable event stream.
 
 This is **not**:
-- an agent framework
 - a RAG pipeline
 - a workflow engine
 - a UI product
 
 The gateway does not decide *what* to do. It decides *whether* an explicitly declared action may execute.
+
+## Supported Providers (v0.4.x)
+
+The gateway supports multiple LLM providers through a unified execution contract.
+
+Currently supported:
+- **OpenAI** (cloud)
+- **Anthropic** (cloud)
+- **Ollama** (local or remote)
+
+Providers are discovered at runtime via capabilities introspection.
 
 ---
 
@@ -122,28 +133,42 @@ Create a virtual environment and install the gateway:
 pip install .
 ```
 
-### Docker
-The gateway can be started with a single Docker command. No interactive setup, no hidden defaults.
+### Docker (Quick Start)
+
+The gateway can be started in **observer mode** without executing any LLM calls:
 
 ```bash
-docker build -t dbl-gateway .
+docker run -p 8010:8010 dbl-gateway
+```
+
+This allows inspecting capabilities, snapshots, and event streams.
+
+To enable execution, provide a policy and at least one provider:
+
+```bash
 docker run -p 8010:8010 \
-  -e OPENAI_API_KEY="sk-..." \
   -e DBL_GATEWAY_POLICY_MODULE="dbl_policy.allow_all" \
-  dbl-gateway
+  -e OPENAI_API_KEY="sk-..." \
+  lukaspfister/dbl-gateway:0.4.2
 ```
 
 ---
 
 ## Running the Gateway
 
-### Required Environment Variables
+### Environment Variables
 
+#### Required for execution
 | Variable | Description |
-| :--- | :--- |
-| `OPENAI_API_KEY` | Provider API key. |
-| `DBL_GATEWAY_POLICY_MODULE` | Policy module (e.g., `dbl_policy.allow_all`). |
-| `DBL_GATEWAY_POLICY_OBJECT` | Policy object inside the module (default: `policy`). |
+|---|---|
+| DBL_GATEWAY_POLICY_MODULE | Policy module path |
+| OPENAI_API_KEY | Or another provider |
+
+#### Optional
+| Variable | Description |
+|---|---|
+| DBL_GATEWAY_POLICY_OBJECT | Default: `policy` |
+| OLLAMA_HOST | Remote Ollama endpoint |
 
 ### Start Command
 ```bash

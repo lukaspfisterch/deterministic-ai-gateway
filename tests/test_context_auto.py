@@ -88,7 +88,7 @@ def test_auto_context_expansion_first_plus_last_n(mock_config):
     transforms = norms.get("transformations", [])
     auto_ops = [n for n in transforms if n.get("op") == "AUTO_DECLARE_REFS"]
     assert len(auto_ops) == 1
-    assert auto_ops[0]["args"]["count"] == 4
+    assert auto_ops[0]["params"]["count"] == 4
 
 def test_auto_context_defaults(mock_config):
     # If context_mode not provided, but no declared_refs, default to nothing? 

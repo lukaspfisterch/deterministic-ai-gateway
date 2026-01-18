@@ -19,7 +19,7 @@ from dbl_core.events.trace_digest import trace_digest
 from .admission import admit_and_shape_intent, AdmissionFailure
 from .capabilities import CapabilitiesResponse, get_capabilities_cached, resolve_model, resolve_provider, get_capabilities
 from .adapters.execution_adapter_kl import KlExecutionAdapter
-from .adapters.policy_adapter_dbl_policy import DblPolicyAdapter, _load_policy
+from .adapters.policy_adapter_dbl_policy import DblPolicyAdapter, ObserverPolicy, _load_policy
 from .context_builder import build_context_with_refs
 from .config import get_context_config
 from .decision_builder import build_normative_decision
@@ -59,6 +59,8 @@ def create_app(*, start_workers: bool = True) -> FastAPI:
         _configure_logging()
         _audit_env()
         policy = _load_policy_with_fallback()
+        if policy is None:
+            policy = ObserverPolicy()  # type: ignore
         store = create_store()
         work_queue = asyncio.Queue(maxsize=_work_queue_max()) if start_workers else None
         app.state.store = store
@@ -816,14 +818,21 @@ def _audit_env() -> None:
         _LOGGER.info("  %s: %s", name, present(name))
 
 
-def _load_policy_with_fallback() -> object:
+def _load_policy_with_fallback() -> object | None:
     import os
+
+    module_var = os.getenv("DBL_GATEWAY_POLICY_MODULE", "").strip()
+    if not module_var:
+        _LOGGER.warning("⚠️  No policy configured.")
+        _LOGGER.warning("Gateway started in READ-ONLY / OBSERVER mode.")
+        _LOGGER.warning("Required for execution:\n  DBL_GATEWAY_POLICY_MODULE=<module path>")
+        _LOGGER.warning("Example:\n  -e DBL_GATEWAY_POLICY_MODULE=dbl_policy.allow_all")
+        return None
 
     try:
         policy = _load_policy()
-        module_path = os.getenv("DBL_GATEWAY_POLICY_MODULE", "").strip()
         obj_name = os.getenv("DBL_GATEWAY_POLICY_OBJECT", "POLICY").strip() or "POLICY"
-        _LOGGER.info("Policy: resolved %s:%s", module_path, obj_name)
+        _LOGGER.info("Policy: resolved %s:%s", module_var, obj_name)
         return policy
     except Exception as exc:
         if _get_gateway_mode() == "dev":

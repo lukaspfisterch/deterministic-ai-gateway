@@ -2,6 +2,11 @@
 
 
 
+## v0.4.2 — Observer Mode & UX
+- **Observer Mode**: Gateway starts gracefully without policy/providers, logging instructions instead of crashing.
+- **Improved UX**: Refined README with clearer Docker and environment variable sections.
+- **Version Bump**: Prepared for PyPI and Docker Hub release.
+
 ## v0.4.1 — Context, Performance & Ollama
  
 **Capabilities & Performance**

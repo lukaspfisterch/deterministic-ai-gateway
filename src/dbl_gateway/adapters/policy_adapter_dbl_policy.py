@@ -4,13 +4,32 @@ from dataclasses import dataclass
 from importlib import import_module
 from typing import Any, Mapping, get_type_hints
 
-from dbl_policy import Policy, PolicyContext, PolicyDecision, decision_to_dbl_event
+from dbl_policy import (
+    Policy,
+    PolicyContext,
+    PolicyDecision,
+    decision_to_dbl_event,
+    DecisionOutcome,
+    PolicyId,
+    PolicyVersion,
+)
 from dbl_policy.model import ALLOWED_CONTEXT_KEYS as POLICY_ALLOWED_CONTEXT_KEYS
 
 from ..ports.policy_port import DecisionResult, PolicyPort
 
 
 ALLOWED_CONTEXT_KEYS = set(POLICY_ALLOWED_CONTEXT_KEYS)
+
+
+class ObserverPolicy:
+    """Policy that always denies in Observer Mode."""
+    def evaluate(self, context: Any) -> PolicyDecision:
+        return PolicyDecision(
+            outcome=DecisionOutcome.DENY,
+            reason_code="gateway.observer_mode",
+            policy_id=PolicyId("observer"),
+            policy_version=PolicyVersion("1"),
+        )
 
 
 @dataclass(frozen=True)

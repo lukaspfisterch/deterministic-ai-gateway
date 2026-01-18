@@ -149,7 +149,7 @@ def test_decision_primacy_no_execution_without_allow(tmp_path: Path, monkeypatch
 def test_ingress_returns_immediately_without_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DBL_GATEWAY_DB", str(tmp_path / "trail.sqlite"))
 
-    async def slow_execution(self, _intent):
+    async def slow_execution(self, _intent, **kwargs):
         trace_dict, trace_digest = _make_trace()
         await asyncio.sleep(0.3)
         return ExecutionResult(
@@ -190,7 +190,7 @@ def test_ingress_returns_immediately_without_output(tmp_path: Path, monkeypatch:
 def test_execution_error_captured_as_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DBL_GATEWAY_DB", str(tmp_path / "trail.sqlite"))
 
-    async def error_execution(self, _intent):
+    async def error_execution(self, _intent, **kwargs):
         trace_dict, trace_digest = _make_trace()
         return ExecutionResult(
             provider="openai",
@@ -577,7 +577,7 @@ def test_openai_error_message_propagates(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(openai_provider.httpx, "Client", DummyClient)
 
     output_text, trace, trace_digest, error = asyncio.run(
-        _call_kernel("hello", "gpt-4o-mini", "openai", openai_provider.execute, offload=False)
+        _call_kernel([{"role": "user", "content": "hello"}], "gpt-4o-mini", "openai", openai_provider.execute, offload=False)
     )
     assert error is not None
     assert "Incorrect API key provided" in str(error.get("message"))
